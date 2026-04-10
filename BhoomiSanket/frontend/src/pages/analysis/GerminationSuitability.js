@@ -6,6 +6,7 @@ import L from 'leaflet';
 import 'leaflet.heat';
 import { INDIA_CENTER, DEFAULT_ZOOM } from '../../data/geoBounds';
 import QueryBuilder from '../../components/QueryBuilder';
+import { getShsColor } from '../../utils/colorUtils';
 
 // === CONFIGURATION ===
 const API_BASE_URL = process.env.REACT_APP_API_BASE_URL + "/farm-analysis";
@@ -22,13 +23,15 @@ const SHS_COLOR_THRESHOLDS = {
     // Your germination avg_shs values are ~74-78, so tighter cutoffs show multiple colors.
     germination: { good: 77.0, fair: 75.0 }, // >=good => Good (green), >=fair => Fair (yellow), else Poor (red)
     // Your booting avg_shs values are ~83.5-84.7, so tighter cutoffs show multiple colors.
-    booting: { good: 84.5, fair: 84.0 }
+    booting: { good: 84.5, fair: 84.0 },
+    ripening: { good: 77.0, fair: 75.0 }
 };
 
 // NEW: Lat/Lon demo thresholds for heat + marker coloring
 const SUITABILITY_THRESHOLDS = {
     germination: { good: 77.0, fair: 75.0 },
-    booting: { good: 84.5, fair: 84.0 }
+    booting: { good: 84.5, fair: 84.0 },
+    ripening: { good: 77.0, fair: 75.0 }
 };
 
 // Attribute Configuration
@@ -41,14 +44,18 @@ const ATTRIBUTES = [
     { key: "moisture", label: "Soil Moisture", unit: "%" },
     { key: "shs_germination", label: "Germination Suitability", unit: "%" },
     { key: "shs_booting", label: "Booting Suitability", unit: "%" },
+    { key: "shs_ripening", label: "Ripening Suitability", unit: "%" },
     { key: "germ_points", label: "Germination Points", unit: "" },
     { key: "boot_points", label: "Booting Points", unit: "" },
+    { key: "rip_points", label: "Ripening Points", unit: "" },
     { key: "germ_heat", label: "Germination Heatmap", unit: "" },
     { key: "boot_heat", label: "Booting Heatmap", unit: "" },
+    { key: "rip_heat", label: "Ripening Heatmap", unit: "" },
     { key: "temperature", label: "Temperature", unit: "°C" },
 ];
 
-// Experimental Color Logic: Fixed thresholds style (like Leaflet tutorial)
+// getShsColor has been moved to utils/colorUtils.js
+
 const getExperimentalColor = (attr, d) => {
     if (d === null || d === undefined) return '#f3f4f6';
     const attribute = attr === 'oc' ? 'organic_carbon' : attr;
@@ -61,34 +68,32 @@ const getExperimentalColor = (attr, d) => {
 
     switch (attribute) {
         case 'nitrogen':
-            return d > 300 ? colors[8] : d > 270 ? colors[7] : d > 240 ? colors[6] : d > 210 ? colors[5] :
-                d > 180 ? colors[4] : d > 150 ? colors[3] : d > 120 ? colors[2] : colors[1];
+            return d > 260 ? colors[8] : d > 250 ? colors[7] : d > 240 ? colors[6] : d > 230 ? colors[5] :
+                d > 220 ? colors[4] : d > 210 ? colors[3] : d > 200 ? colors[2] : colors[1];
         case 'phosphorus':
-            return d > 25 ? colors[8] : d > 22 ? colors[7] : d > 19 ? colors[6] : d > 16 ? colors[5] :
-                d > 13 ? colors[4] : d > 10 ? colors[3] : d > 7 ? colors[2] : colors[1];
+            return d > 25 ? colors[8] : d > 23 ? colors[7] : d > 21 ? colors[6] : d > 19 ? colors[5] :
+                d > 17 ? colors[4] : d > 15 ? colors[3] : d > 13 ? colors[2] : colors[1];
         case 'potassium':
-            return d > 160 ? colors[8] : d > 150 ? colors[7] : d > 140 ? colors[6] : d > 130 ? colors[5] :
-                d > 120 ? colors[4] : d > 110 ? colors[3] : d > 100 ? colors[2] : colors[1];
+            return d > 145 ? colors[8] : d > 138 ? colors[7] : d > 131 ? colors[6] : d > 124 ? colors[5] :
+                d > 117 ? colors[4] : d > 110 ? colors[3] : d > 103 ? colors[2] : colors[1];
         case 'ph':
-            return d > 8.0 ? colors[8] : d > 7.5 ? colors[7] : d > 7.0 ? colors[6] : d > 6.5 ? colors[5] :
-                d > 6.0 ? colors[4] : d > 5.5 ? colors[3] : d > 5.0 ? colors[2] : colors[1];
+            return d > 6.8 ? colors[8] : d > 6.6 ? colors[7] : d > 6.4 ? colors[6] : d > 6.2 ? colors[5] :
+                d > 6.0 ? colors[4] : d > 5.8 ? colors[3] : d > 5.6 ? colors[2] : colors[1];
         case 'organic_carbon':
-            return d > 0.75 ? colors[8] : d > 0.65 ? colors[7] : d > 0.55 ? colors[6] : d > 0.45 ? colors[5] :
-                d > 0.35 ? colors[4] : d > 0.25 ? colors[3] : d > 0.15 ? colors[2] : colors[1];
+            return d > 0.68 ? colors[8] : d > 0.64 ? colors[7] : d > 0.60 ? colors[6] : d > 0.56 ? colors[5] :
+                d > 0.52 ? colors[4] : d > 0.48 ? colors[3] : d > 0.44 ? colors[2] : colors[1];
         case 'moisture':
-            return d > 30 ? colors[8] : d > 25 ? colors[7] : d > 20 ? colors[6] : d > 15 ? colors[5] :
-                d > 12 ? colors[4] : d > 10 ? colors[3] : d > 8 ? colors[2] : colors[1];
+            return d > 22.0 ? colors[8] : d > 20.5 ? colors[7] : d > 19.0 ? colors[6] : d > 17.5 ? colors[5] :
+                d > 16.0 ? colors[4] : d > 14.5 ? colors[3] : d > 13.0 ? colors[2] : colors[1];
         case 'temperature':
-            return d > 26 ? colors[8] : d > 24 ? colors[7] : d > 22 ? colors[6] : d > 20 ? colors[5] :
-                d > 18 ? colors[4] : d > 16 ? colors[3] : d > 14 ? colors[2] : colors[1];
+            return d > 22.0 ? colors[8] : d > 20.8 ? colors[7] : d > 19.6 ? colors[6] : d > 18.4 ? colors[5] :
+                d > 17.2 ? colors[4] : d > 16.0 ? colors[3] : d > 14.8 ? colors[2] : colors[1];
         case 'shs_germination':
+            return getShsColor('germination', d);
         case 'shs_booting':
-            if (d >= 90) return '#1a9850'; // Excellent
-            if (d >= 80) return '#66bd63'; // Very Good
-            if (d >= 70) return '#a6d96a'; // Good
-            if (d >= 60) return '#fee08b'; // Moderate
-            if (d >= 30) return '#fdae61'; // Poor
-            return '#d73027';           // Very Poor
+            return getShsColor('booting', d);
+        case 'shs_ripening':
+            return getShsColor('ripening', d);
         default:
             return d > 1000 ? colors[8] : d > 500 ? colors[7] : d > 200 ? colors[6] : d > 100 ? colors[5] :
                 d > 50 ? colors[4] : d > 20 ? colors[3] : d > 10 ? colors[2] : colors[1];
@@ -107,27 +112,47 @@ const getLegendData = (attr) => {
     };
 
     const thresholds = {
-        nitrogen: [300, 270, 240, 210, 180, 150, 120],
-        phosphorus: [25, 22, 19, 16, 13, 10, 7],
-        potassium: [160, 150, 140, 130, 120, 110, 100],
-        ph: [8.0, 7.5, 7.0, 6.5, 6.0, 5.5, 5.0],
-        organic_carbon: [0.75, 0.65, 0.55, 0.45, 0.35, 0.25, 0.15],
-        moisture: [30, 25, 20, 15, 12, 10, 8],
-        temperature: [26, 24, 22, 20, 18, 16, 14],
-        shs_germination: [90, 80, 70, 60, 30]
+        nitrogen: [260, 250, 240, 230, 220, 210, 200],
+        phosphorus: [25, 23, 21, 19, 17, 15, 13],
+        potassium: [145, 138, 131, 124, 117, 110, 103],
+        ph: [6.8, 6.6, 6.4, 6.2, 6.0, 5.8, 5.6],
+        organic_carbon: [0.68, 0.64, 0.60, 0.56, 0.52, 0.48, 0.44],
+        moisture: [22.0, 20.5, 19.0, 17.5, 16.0, 14.5, 13.0],
+        temperature: [22.0, 20.8, 19.6, 18.4, 17.2, 16.0, 14.8],
+        shs_germination: [90, 80, 70, 60, 30],
+        shs_ripening: [90, 80, 70, 60, 30]
     };
 
-    if (attribute === 'shs_germination' || attribute === 'shs_booting' ||
-        attribute === 'germ_points' || attribute === 'boot_points' ||
-        attribute === 'germ_heat' || attribute === 'boot_heat') {
-
+    if (attribute === 'shs_germination' || attribute === 'germ_points' || attribute === 'germ_heat') {
         return [
-            { color: '#1a9850', label: 'Excellent (90-100%)' },
-            { color: '#66bd63', label: 'Very Good (80-90%)' },
-            { color: '#a6d96a', label: 'Good (70-80%)' },
-            { color: '#fee08b', label: 'Moderate (60-70%)' },
-            { color: '#fdae61', label: 'Poor (30-60%)' },
-            { color: '#d73027', label: 'Very Poor (0-30%)' }
+            { color: '#1a9850', label: 'Excellent (>78%)' },
+            { color: '#66bd63', label: 'Very Good (77-78%)' },
+            { color: '#a6d96a', label: 'Good (76-77%)' },
+            { color: '#fee08b', label: 'Moderate (75-76%)' },
+            { color: '#fdae61', label: 'Poor (74-75%)' },
+            { color: '#d73027', label: 'Very Poor (<74%)' }
+        ];
+    }
+
+    if (attribute === 'shs_booting' || attribute === 'boot_points' || attribute === 'boot_heat') {
+        return [
+            { color: '#1a9850', label: 'Excellent (>84.6%)' },
+            { color: '#66bd63', label: 'Very Good (84.4-84.6%)' },
+            { color: '#a6d96a', label: 'Good (84.2-84.4%)' },
+            { color: '#fee08b', label: 'Moderate (84.0-84.2%)' },
+            { color: '#fdae61', label: 'Poor (83.8-84.0%)' },
+            { color: '#d73027', label: 'Very Poor (<83.8%)' }
+        ];
+    }
+
+    if (attribute === 'shs_ripening' || attribute === 'rip_points' || attribute === 'rip_heat') {
+        return [
+            { color: '#1a9850', label: 'Excellent (>78.5%)' },
+            { color: '#66bd63', label: 'Very Good (78.0-78.5%)' },
+            { color: '#a6d96a', label: 'Good (77.5-78.0%)' },
+            { color: '#fee08b', label: 'Moderate (77.0-77.5%)' },
+            { color: '#fdae61', label: 'Poor (76.5-77.0%)' },
+            { color: '#d73027', label: 'Very Poor (<76.5%)' }
         ];
     }
 
@@ -153,22 +178,52 @@ const SuitabilityPointsLayer = ({ points, stage }) => {
     if (!points || points.length === 0) return null;
 
     const t = SUITABILITY_THRESHOLDS[stage] || SUITABILITY_THRESHOLDS.germination;
-    const getCat = (shs) => {
+    const getCat = (shs, stageType) => {
         if (shs === null || shs === undefined) return null;
-        if (shs >= 90) return "Excellent";
-        if (shs >= 80) return "Very Good";
-        if (shs >= 70) return "Good";
-        if (shs >= 60) return "Moderate";
-        if (shs >= 30) return "Poor";
+        if (stageType === 'booting') {
+            if (shs >= 84.6) return "Excellent";
+            if (shs >= 84.4) return "Very Good";
+            if (shs >= 84.2) return "Good";
+            if (shs >= 84.0) return "Moderate";
+            if (shs >= 83.8) return "Poor";
+            return "Very Poor";
+        }
+        if (stageType === 'ripening') {
+            if (shs >= 78.5) return "Excellent";
+            if (shs >= 78.0) return "Very Good";
+            if (shs >= 77.5) return "Good";
+            if (shs >= 77.0) return "Moderate";
+            if (shs >= 76.5) return "Poor";
+            return "Very Poor";
+        }
+        // Germination default
+        if (shs >= 78) return "Excellent";
+        if (shs >= 77) return "Very Good";
+        if (shs >= 76) return "Good";
+        if (shs >= 75) return "Moderate";
+        if (shs >= 74) return "Poor";
         return "Very Poor";
     };
-    const getColor = (shs) => getExperimentalColor(stage === 'booting' ? 'shs_booting' : 'shs_germination', shs);
+    const getColor = (shs) => {
+        const attrMap = {
+            'germination': 'shs_germination',
+            'booting': 'shs_booting',
+            'ripening': 'shs_ripening'
+        };
+        return getExperimentalColor(attrMap[stage] || 'shs_germination', shs);
+    };
 
     return (
         <>
             {points.map((p, idx) => {
-                const shs = stage === "booting" ? p.booting?.shs : p.germination?.shs;
-                const cat = getCat(shs);
+                let shs;
+                if (stage === "booting") shs = p.booting?.shs;
+                else if (stage === "ripening") shs = p.ripening?.shs;
+                else shs = p.germination?.shs;
+
+                if (shs === null || shs === undefined) return null;
+
+                const cat = getCat(shs, stage);
                 return (
                     <CircleMarker
                         key={`${stage}-${idx}`}
@@ -185,7 +240,7 @@ const SuitabilityPointsLayer = ({ points, stage }) => {
                             <div className="text-sm">
                                 <div className="font-bold">{stage.toUpperCase()} point</div>
                                 <div>SHS: {typeof shs === "number" ? shs.toFixed(2) : "N/A"}</div>
-                                <div>Category (demo): {cat || "N/A"}</div>
+                                <div>Category : {cat || "N/A"}</div>
                                 <div className="text-xs text-gray-500 mt-1">Lat: {p.lat.toFixed(4)} Lon: {p.lon.toFixed(4)}</div>
                             </div>
                         </Popup>
@@ -210,23 +265,48 @@ const SuitabilityHeatLayer = ({ points, stage, enabled }) => {
             return;
         }
 
-        const t = SUITABILITY_THRESHOLDS[stage] || SUITABILITY_THRESHOLDS.germination;
-        const min = t.fair - 5;
-        const max = t.good + 5;
         const norm = (v) => {
             if (v === null || v === undefined) return 0;
-            return Math.max(0, Math.min(1, (v - min) / (max - min)));
+            let minVal = 74, maxVal = 78;
+            if (stage === 'booting') { minVal = 83.8; maxVal = 84.6; }
+            if (stage === 'ripening') { minVal = 76.5; maxVal = 78.5; }
+
+            if (v <= minVal) return 0.2; // Baseline intensity for Very Poor
+            if (v >= maxVal) return 1.0; // Max intensity for Excellent
+            // Scale linearly between 0.2 and 1.0
+            return 0.2 + 0.8 * ((v - minVal) / (maxVal - minVal));
+        };
+
+        const customGradient = {
+            0.2: '#d73027', // Very Poor
+            0.4: '#fdae61', // Poor
+            0.6: '#fee08b', // Moderate
+            0.8: '#a6d96a', // Good
+            0.9: '#66bd63', // Very Good
+            1.0: '#1a9850'  // Excellent
         };
 
         const heatData = points
             .map(p => {
-                const shs = stage === "booting" ? p.booting?.shs : p.germination?.shs;
-                return [p.lat, p.lon, norm(shs)];
-            });
+                let shs;
+                if (stage === "booting") shs = p.booting?.shs;
+                else if (stage === "ripening") shs = p.ripening?.shs;
+                else shs = p.germination?.shs;
+
+                return shs !== null && shs !== undefined ? [p.lat, p.lon, norm(shs)] : null;
+            })
+            .filter(p => p !== null);
 
         if (layerRef.current) map.removeLayer(layerRef.current);
         // @ts-ignore
-        layerRef.current = L.heatLayer(heatData, { radius: 18, blur: 14, maxZoom: 10 });
+        layerRef.current = L.heatLayer(heatData, {
+            radius: 20,
+            blur: 15,
+            maxZoom: 10,
+            max: 1.0,           // Ensures our 1.0 intensities represent maximum density
+            minOpacity: 0.3,    // Keep colors somewhat opaque
+            gradient: customGradient
+        });
         layerRef.current.addTo(map);
 
         return () => {
@@ -241,7 +321,7 @@ const SuitabilityHeatLayer = ({ points, stage, enabled }) => {
 };
 
 // Component to handle Vector Boundaries
-const VectorBoundaryLayer = ({ type, visible, weight = 1.5, color = '#9e9e9e', matchedSubdistricts, selectedAttribute, shsGermData, shsBootData, soilData, shsDistricts }) => {
+const VectorBoundaryLayer = ({ type, visible, weight = 1.5, color = '#9e9e9e', matchedSubdistricts, selectedAttribute, shsGermData, shsBootData, shsRipData, soilData, shsDistricts }) => {
     const [geoJsonData, setGeoJsonData] = useState(null);
 
     useEffect(() => {
@@ -291,10 +371,15 @@ const VectorBoundaryLayer = ({ type, visible, weight = 1.5, color = '#9e9e9e', m
             let fillColor = getExperimentalColor(selectedAttribute, val);
 
             // SPECIAL LOGIC: If we are viewing suitability, check the live SHS data first
-            if (selectedAttribute === 'shs_germination' || selectedAttribute === 'shs_booting') {
-                const stage = selectedAttribute === 'shs_germination' ? 'germination' : 'booting';
+            if (selectedAttribute === 'shs_germination' || selectedAttribute === 'shs_booting' || selectedAttribute === 'shs_ripening') {
+                const stage = selectedAttribute === 'shs_germination' ? 'germination' : (selectedAttribute === 'shs_booting' ? 'booting' : 'ripening');
                 const t = SHS_COLOR_THRESHOLDS[stage];
-                const shsData = stage === 'germination' ? shsGermData : shsBootData;
+
+                let shsData;
+                if (stage === 'germination') shsData = shsGermData;
+                else if (stage === 'booting') shsData = shsBootData;
+                else shsData = shsRipData;
+
                 const normalizedSHS = {};
                 Object.entries(shsData || {}).forEach(([k, v]) => {
                     normalizedSHS[k.trim().toLowerCase()] = v;
@@ -372,12 +457,17 @@ const VectorBoundaryLayer = ({ type, visible, weight = 1.5, color = '#9e9e9e', m
                 let label = attr?.label || selectedAttribute;
 
                 // SPECIAL LOGIC: Show values ONLY for SHS districts (or if it's the state layer)
-                const isSHSAttribute = selectedAttribute === 'shs_germination' || selectedAttribute === 'shs_booting';
+                const isSHSAttribute = selectedAttribute === 'shs_germination' || selectedAttribute === 'shs_booting' || selectedAttribute === 'shs_ripening';
                 const isSHSDistrict = shsDistricts && shsDistricts.some(d => d.toLowerCase() === districtName);
 
                 if (isSHSAttribute) {
-                    const stage = selectedAttribute === 'shs_germination' ? 'germination' : 'booting';
-                    const shsData = stage === 'germination' ? shsGermData : shsBootData;
+                    const stage = selectedAttribute === 'shs_germination' ? 'germination' : (selectedAttribute === 'shs_booting' ? 'booting' : 'ripening');
+
+                    let shsData;
+                    if (stage === 'germination') shsData = shsGermData;
+                    else if (stage === 'booting') shsData = shsBootData;
+                    else shsData = shsRipData;
+
                     const normalizedSHS = {};
                     Object.entries(shsData || {}).forEach(([k, v]) => {
                         normalizedSHS[k.trim().toLowerCase()] = v;
@@ -518,6 +608,7 @@ const GerminationSuitability = () => {
     const [showPoints, setShowPoints] = useState(false);
     const [germShsData, setGermShsData] = useState({});
     const [bootShsData, setBootShsData] = useState({});
+    const [ripShsData, setRipShsData] = useState({});
 
     // NEW: Lat/Lon suitability overlays
     const [latlonPoints, setLatlonPoints] = useState([]);
@@ -537,8 +628,11 @@ const GerminationSuitability = () => {
     useEffect(() => {
         const hasGermData = germShsData && Object.keys(germShsData).length > 0;
         const hasBootData = bootShsData && Object.keys(bootShsData).length > 0;
+        const hasRipData = ripShsData && Object.keys(ripShsData).length > 0;
 
-        if ((selectedAttribute === 'shs_germination' && hasGermData || selectedAttribute === 'shs_booting' && hasBootData) && !filters.state) {
+        if (((selectedAttribute === 'shs_germination' && hasGermData) ||
+            (selectedAttribute === 'shs_booting' && hasBootData) ||
+            (selectedAttribute === 'shs_ripening' && hasRipData)) && !filters.state) {
             setFilters((prev) => ({ ...prev, state: 'Maharashtra' }));
         }
 
@@ -641,9 +735,18 @@ const GerminationSuitability = () => {
         }
     }, [selectedAttribute]);
 
+    useEffect(() => {
+        if (selectedAttribute === 'shs_ripening') {
+            fetch(`${SHS_API_BASE_URL}/districts/ripening`)
+                .then(res => res.json())
+                .then(data => setRipShsData(data))
+                .catch(err => console.error("Error fetching ripening SHS data:", err));
+        }
+    }, [selectedAttribute]);
+
     // NEW: Fetch Lat/Lon suitability points (from main backend map endpoint)
     useEffect(() => {
-        const pointLayers = ['germ_points', 'boot_points', 'germ_heat', 'boot_heat'];
+        const pointLayers = ['germ_points', 'boot_points', 'rip_points', 'germ_heat', 'boot_heat', 'rip_heat'];
         const anyEnabled = pointLayers.includes(selectedAttribute);
         if (!anyEnabled) return;
 
@@ -804,6 +907,9 @@ const GerminationSuitability = () => {
                             matchedSubdistricts={matchedSubdistricts}
                             selectedAttribute={selectedAttribute}
                             attributeStats={attributeStats}
+                            shsGermData={germShsData}
+                            shsBootData={bootShsData}
+                            shsRipData={ripShsData}
                         />
 
                         {/* Optional matched subdistrict highlight (if any) */}
@@ -815,6 +921,9 @@ const GerminationSuitability = () => {
                             matchedSubdistricts={matchedSubdistricts}
                             selectedAttribute={selectedAttribute}
                             attributeStats={attributeStats}
+                            shsGermData={germShsData}
+                            shsBootData={bootShsData}
+                            shsRipData={ripShsData}
                         />
 
                         {/* Districts Layer (Now handles SHS and Soil Data logic internally) */}
@@ -828,6 +937,7 @@ const GerminationSuitability = () => {
                             attributeStats={attributeStats}
                             shsGermData={germShsData}
                             shsBootData={bootShsData}
+                            shsRipData={ripShsData}
                             soilData={aggregatedDistrictData}
                             shsDistricts={shsDistricts}
                         />
@@ -837,8 +947,10 @@ const GerminationSuitability = () => {
                         {/* NEW: Lat/Lon overlays */}
                         <SuitabilityHeatLayer points={latlonPoints} stage="germination" enabled={selectedAttribute === 'germ_heat'} />
                         <SuitabilityHeatLayer points={latlonPoints} stage="booting" enabled={selectedAttribute === 'boot_heat'} />
+                        <SuitabilityHeatLayer points={latlonPoints} stage="ripening" enabled={selectedAttribute === 'rip_heat'} />
                         {selectedAttribute === 'germ_points' && <SuitabilityPointsLayer points={latlonPoints} stage="germination" />}
                         {selectedAttribute === 'boot_points' && <SuitabilityPointsLayer points={latlonPoints} stage="booting" />}
+                        {selectedAttribute === 'rip_points' && <SuitabilityPointsLayer points={latlonPoints} stage="ripening" />}
                     </MapContainer>
 
                     {/* Query Builder Toggle Button */}
@@ -914,16 +1026,7 @@ const GerminationSuitability = () => {
                                         />
                                         <span className="group-hover:text-green-700 transition-colors">Districts</span>
                                     </label>
-                                    <label className="flex items-center gap-2 cursor-pointer group text-[13px] text-gray-700">
-                                        <input
-                                            type="checkbox"
-                                            checked={showSubdistricts}
-                                            onChange={(e) => setShowSubdistricts(e.target.checked)}
-                                            className="w-3.5 h-3.5 text-green-600 border-gray-300 rounded focus:ring-green-500 cursor-pointer"
-                                        />
-                                        <span className="group-hover:text-green-700 transition-colors">Sub-districts</span>
-                                        {showSubdistricts && loading && <span className="animate-pulse text-[9px] text-orange-500 font-bold ml-1">Loading...</span>}
-                                    </label>
+
                                     <label className="flex items-center gap-2 cursor-pointer group text-[13px] text-gray-700">
                                         <input
                                             type="radio"
@@ -945,6 +1048,17 @@ const GerminationSuitability = () => {
                                         />
                                         <span className="group-hover:text-purple-700 transition-colors capitalize">Booting Suitability</span>
                                         {selectedAttribute === 'shs_booting' && !bootShsData && <span className="animate-pulse text-[9px] text-orange-500 font-bold ml-1">Loading...</span>}
+                                    </label>
+                                    <label className="flex items-center gap-2 cursor-pointer group text-[13px] text-gray-700">
+                                        <input
+                                            type="radio"
+                                            name="suitability-radio"
+                                            checked={selectedAttribute === 'shs_ripening'}
+                                            onChange={() => setSelectedAttribute('shs_ripening')}
+                                            className="w-3.5 h-3.5 text-orange-600 border-gray-300 rounded focus:ring-orange-500 cursor-pointer"
+                                        />
+                                        <span className="group-hover:text-orange-700 transition-colors capitalize">Ripening Suitability</span>
+                                        {selectedAttribute === 'shs_ripening' && !ripShsData && <span className="animate-pulse text-[9px] text-orange-500 font-bold ml-1">Loading...</span>}
                                     </label>
                                     <div className="pt-2 mt-2 border-t border-gray-100">
                                         <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">Lat/Lon Suitability</div>
@@ -987,6 +1101,26 @@ const GerminationSuitability = () => {
                                                 className="w-3.5 h-3.5 text-purple-600 border-gray-300 rounded focus:ring-purple-500 cursor-pointer"
                                             />
                                             <span className="group-hover:text-purple-700 transition-colors">Booting Heatmap</span>
+                                        </label>
+                                        <label className="flex items-center gap-2 cursor-pointer group text-[13px] text-gray-700">
+                                            <input
+                                                type="radio"
+                                                name="suitability-radio"
+                                                checked={selectedAttribute === 'rip_points'}
+                                                onChange={() => setSelectedAttribute('rip_points')}
+                                                className="w-3.5 h-3.5 text-orange-600 border-gray-300 rounded focus:ring-orange-500 cursor-pointer"
+                                            />
+                                            <span className="group-hover:text-orange-700 transition-colors">Ripening Points</span>
+                                        </label>
+                                        <label className="flex items-center gap-2 cursor-pointer group text-[13px] text-gray-700">
+                                            <input
+                                                type="radio"
+                                                name="suitability-radio"
+                                                checked={selectedAttribute === 'rip_heat'}
+                                                onChange={() => setSelectedAttribute('rip_heat')}
+                                                className="w-3.5 h-3.5 text-orange-600 border-gray-300 rounded focus:ring-orange-500 cursor-pointer"
+                                            />
+                                            <span className="group-hover:text-orange-700 transition-colors">Ripening Heatmap</span>
                                         </label>
                                     </div>
                                 </div>
@@ -1101,7 +1235,8 @@ const GerminationSuitability = () => {
                             {ATTRIBUTES.filter(a =>
                                 !a.key.startsWith('shs_') &&
                                 !a.key.startsWith('germ_') &&
-                                !a.key.startsWith('boot_')
+                                !a.key.startsWith('boot_') &&
+                                !a.key.startsWith('rip_')
                             ).map(attr => (
                                 <label
                                     key={attr.key}

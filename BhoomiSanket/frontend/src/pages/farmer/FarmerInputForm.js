@@ -2,9 +2,20 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import FarmerMap from '../../components/map/FarmerMap';
-import { STATE_DATA } from '../../data/geoBounds';
+import { STATE_DATA, INDIA_CENTER, DEFAULT_ZOOM } from '../../data/geoBounds';
+import { getSuitabilityCategory, getShsColor } from '../../utils/colorUtils';
 
 const baseUrl = process.env.REACT_APP_API_BASE_URL;
+
+const VALIDATION_RULES = {
+    n: { min: 100, max: 400, label: "Nitrogen" },
+    p: { min: 5, max: 35, label: "Phosphorus" },
+    k: { min: 150, max: 590, label: "Potassium" },
+    ph: { min: 5.7, max: 8.5, label: "pH Level" },
+    moisture: { min: 10, max: 40, label: "Moisture" },
+    organic_carbon: { min: 0.2, max: 1.0, label: "Organic Carbon" },
+    temperature: { min: 14, max: 30, label: "Temperature" }
+};
 
 const FarmerInputForm = () => {
     const navigate = useNavigate();
@@ -34,8 +45,13 @@ const FarmerInputForm = () => {
         ph: '',
         moisture: '',
         organic_carbon: '',
-        temperature: ''
+        temperature: '',
+        stage: ''
     });
+
+    const [analysisResult, setAnalysisResult] = useState(null);
+    const [fieldErrors, setFieldErrors] = useState({});
+    const [activeStage, setActiveStage] = useState('germination');
 
     // --- Map Logic ---
 
@@ -68,6 +84,7 @@ const FarmerInputForm = () => {
         setFullSubDistrictData(null); // Clear stored sub-district data
 
         if (newState) {
+            setAnalysisResult(null); // Clear previous results
             try {
                 setLoading(true);
                 const res = await fetch(`${baseUrl}/map/district?state=${newState}`);
@@ -211,14 +228,31 @@ const FarmerInputForm = () => {
     };
 
     const handleInputChange = (e) => {
-        setFormData({
-            ...formData,
-            [e.target.name]: e.target.value
-        });
+        const { name, value } = e.target;
+        setFormData({ ...formData, [name]: value });
+
+        // Real-time validation
+        if (VALIDATION_RULES[name]) {
+            const rule = VALIDATION_RULES[name];
+            const numVal = parseFloat(value);
+            if (value && (numVal < rule.min || numVal > rule.max)) {
+                setFieldErrors(prev => ({
+                    ...prev,
+                    [name]: `Value out of range (${rule.min}-${rule.max})`
+                }));
+            } else {
+                setFieldErrors(prev => {
+                    const newErrors = { ...prev };
+                    delete newErrors[name];
+                    return newErrors;
+                });
+            }
+        }
     };
 
     const handleSubmit = async (e) => {
         e.preventDefault();
+        setAnalysisResult(null); // Clear previous results to show a fresh state
         setLoading(true);
         setError(null);
 
@@ -236,8 +270,30 @@ const FarmerInputForm = () => {
             moisture: parseFloat(formData.moisture) || 0.0,
             organic_carbon: parseFloat(formData.organic_carbon) || 0.0,
             temperature: parseFloat(formData.temperature) || 0.0,
+            selected_stage: formData.stage,
             coordinates: markerPos ? [markerPos.lat, markerPos.lng] : null
         };
+
+        // Final validation before submission
+        const errors = {};
+        Object.keys(VALIDATION_RULES).forEach(key => {
+            const rule = VALIDATION_RULES[key];
+            const val = parseFloat(formData[key]);
+            if (formData[key] && (val < rule.min || val > rule.max)) {
+                errors[key] = `Value out of range (${rule.min}-${rule.max})`;
+            }
+        });
+
+        if (Object.keys(errors).length > 0) {
+            setFieldErrors(errors);
+            setError("Some fields have values outside the recommended range.");
+            return;
+        }
+
+        if (!formData.stage) {
+            setError("Please select a growth stage (Germination, Booting, or Ripening).");
+            return;
+        }
 
         try {
             // Mock API call or real endpoint
@@ -253,10 +309,10 @@ const FarmerInputForm = () => {
             if (!res.ok) throw new Error("Analysis failed");
 
             const data = await res.json();
-
-            // Redirect to Advanced Analysis Page
-            // Pass the district so it can be pre-selected
-            navigate('/germination-suitability', { state: { district: formData.district || "AMRITSAR" } });
+            setAnalysisResult(data);
+            
+            // Do NOT navigate automatically. Let the user see the result on the map.
+            // console.log("Analysis Result saved to state:", data);
 
         } catch (err) {
             console.error("API Error:", err);
@@ -291,6 +347,9 @@ const FarmerInputForm = () => {
                         boundaryGeoJSON={boundaryGeoJSON}
                         onLocationSelect={setMarkerPos}
                         onRegionSelect={handleMapRegionClick}
+                        analysisResult={analysisResult}
+                        activeRegion={formData.subDistrict || formData.district || formData.state}
+                        activeStage={formData.stage}
                     />
                 </div>
 
@@ -308,6 +367,63 @@ const FarmerInputForm = () => {
                                 </div>
                             )}
                         </div>
+
+                        {analysisResult && (
+                            <div className="mb-8 p-6 bg-green-50 rounded-xl border border-green-100 shadow-sm animate-in fade-in slide-in-from-top-4 duration-500">
+                                <div className="flex justify-between items-center mb-4">
+                                    <h3 className="text-lg font-bold text-green-900">Analysis Results</h3>
+                                    <span className="px-2 py-1 bg-green-100 text-green-700 text-[10px] font-bold uppercase rounded">Live</span>
+                                </div>
+                                
+                                <div className="space-y-4">
+                                    <div className="flex justify-between items-end">
+                                        <div>
+                                            <p className="text-[10px] text-gray-500 uppercase font-bold tracking-wider">{formData.stage} Score</p>
+                                            <p className="text-2xl font-black text-green-800">
+                                                {formData.stage === 'germination' ? analysisResult.germ_shs.toFixed(1) : 
+                                                 formData.stage === 'booting' ? analysisResult.boot_shs.toFixed(1) : 
+                                                 analysisResult.rip_shs.toFixed(1)}%
+                                            </p>
+                                        </div>
+                                        <div className="text-right">
+                                            <p className="text-[10px] text-gray-500 uppercase font-bold tracking-wider">Suitability</p>
+                                            <p className="text-sm font-bold truncate" style={{ 
+                                                color: getShsColor(formData.stage, 
+                                                    formData.stage === 'germination' ? analysisResult.germ_shs : 
+                                                    formData.stage === 'booting' ? analysisResult.boot_shs : 
+                                                    analysisResult.rip_shs) 
+                                            }}>
+                                                {getSuitabilityCategory(formData.stage, 
+                                                    formData.stage === 'germination' ? analysisResult.germ_shs : 
+                                                    formData.stage === 'booting' ? analysisResult.boot_shs : 
+                                                    analysisResult.rip_shs)}
+                                            </p>
+                                        </div>
+                                    </div>
+                                    <div className="pt-3 border-t border-green-100 italic text-[10px] text-gray-500">
+                                        Note: This result is specifically calculated for the {formData.stage} growth stage.
+                                    </div>
+                                </div>
+
+                                <div className="mt-6 flex gap-3">
+                                    <button 
+                                        onClick={() => navigate('/germination-suitability', { state: { district: formData.district } })}
+                                        className="flex-grow py-2 px-3 bg-white border border-green-200 text-green-700 text-xs font-bold rounded-lg hover:bg-green-100 transition-colors shadow-sm"
+                                    >
+                                        View Regional Map
+                                    </button>
+                                    <button 
+                                        onClick={() => {
+                                            setAnalysisResult(null);
+                                            setFormData({...formData, n: '', p: '', k: '', ph: '', moisture: '', organic_carbon: '', temperature: ''});
+                                        }}
+                                        className="py-2 px-3 bg-gray-100 text-gray-600 text-xs font-bold rounded-lg hover:bg-gray-200 transition-colors"
+                                    >
+                                        Reset
+                                    </button>
+                                </div>
+                            </div>
+                        )}
 
                         <form onSubmit={handleSubmit} className="space-y-6">
 
@@ -383,89 +499,135 @@ const FarmerInputForm = () => {
                                 </h3>
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                     <div>
-                                        <label className="block text-sm font-medium text-gray-700 mb-1">Nitrogen (N)</label>
+                                        <div className="flex justify-between items-center mb-1">
+                                            <label className="block text-sm font-medium text-gray-700">Nitrogen (N)</label>
+                                            <span className="text-[10px] font-bold text-green-600 bg-green-50 px-1.5 rounded-full border border-green-100">Range: 100 - 400</span>
+                                        </div>
                                         <input
                                             type="number"
                                             name="n"
                                             value={formData.n}
                                             onChange={handleInputChange}
-                                            className="w-full px-3 py-2 border border-gray-300 rounded focus:ring-green-500 focus:border-green-500"
-                                            placeholder="mg/kg"
+                                            className={`w-full px-3 py-2 border rounded focus:ring-green-500 focus:border-green-500 ${fieldErrors.n ? 'border-red-500 bg-red-50' : 'border-gray-300'}`}
+                                            placeholder="mg/kg (100 - 400)"
                                             required
                                         />
+                                        {fieldErrors.n && <p className="text-[10px] text-red-600 mt-1 font-bold">{fieldErrors.n}</p>}
                                     </div>
                                     <div>
-                                        <label className="block text-sm font-medium text-gray-700 mb-1">Phosphorus (P)</label>
+                                        <div className="flex justify-between items-center mb-1">
+                                            <label className="block text-sm font-medium text-gray-700">Phosphorus (P)</label>
+                                            <span className="text-[10px] font-bold text-green-600 bg-green-50 px-1.5 rounded-full border border-green-100">Range: 5 - 35</span>
+                                        </div>
                                         <input
                                             type="number"
                                             name="p"
                                             value={formData.p}
                                             onChange={handleInputChange}
-                                            className="w-full px-3 py-2 border border-gray-300 rounded focus:ring-green-500 focus:border-green-500"
-                                            placeholder="mg/kg"
+                                            className={`w-full px-3 py-2 border rounded focus:ring-green-500 focus:border-green-500 ${fieldErrors.p ? 'border-red-500 bg-red-50' : 'border-gray-300'}`}
+                                            placeholder="mg/kg (5 - 35)"
                                             required
                                         />
+                                        {fieldErrors.p && <p className="text-[10px] text-red-600 mt-1 font-bold">{fieldErrors.p}</p>}
                                     </div>
                                     <div>
-                                        <label className="block text-sm font-medium text-gray-700 mb-1">Potassium (K)</label>
+                                        <div className="flex justify-between items-center mb-1">
+                                            <label className="block text-sm font-medium text-gray-700">Potassium (K)</label>
+                                            <span className="text-[10px] font-bold text-green-600 bg-green-50 px-1.5 rounded-full border border-green-100">Range: 150 - 590</span>
+                                        </div>
                                         <input
                                             type="number"
                                             name="k"
                                             value={formData.k}
                                             onChange={handleInputChange}
-                                            className="w-full px-3 py-2 border border-gray-300 rounded focus:ring-green-500 focus:border-green-500"
-                                            placeholder="mg/kg"
+                                            className={`w-full px-3 py-2 border rounded focus:ring-green-500 focus:border-green-500 ${fieldErrors.k ? 'border-red-500 bg-red-50' : 'border-gray-300'}`}
+                                            placeholder="mg/kg (150 - 590)"
                                             required
                                         />
+                                        {fieldErrors.k && <p className="text-[10px] text-red-600 mt-1 font-bold">{fieldErrors.k}</p>}
                                     </div>
                                     <div>
-                                        <label className="block text-sm font-medium text-gray-700 mb-1">pH Level</label>
+                                        <div className="flex justify-between items-center mb-1">
+                                            <label className="block text-sm font-medium text-gray-700">pH Level</label>
+                                            <span className="text-[10px] font-bold text-green-600 bg-green-50 px-1.5 rounded-full border border-green-100">Range: 5.7 - 8.5</span>
+                                        </div>
                                         <input
                                             type="number"
                                             step="0.1"
                                             name="ph"
                                             value={formData.ph}
                                             onChange={handleInputChange}
-                                            className="w-full px-3 py-2 border border-gray-300 rounded focus:ring-green-500 focus:border-green-500"
-                                            placeholder="e.g. 6.5"
+                                            className={`w-full px-3 py-2 border rounded focus:ring-green-500 focus:border-green-500 ${fieldErrors.ph ? 'border-red-500 bg-red-50' : 'border-gray-300'}`}
+                                            placeholder="e.g. 6.5 (5.7 - 8.5)"
                                             required
                                         />
+                                        {fieldErrors.ph && <p className="text-[10px] text-red-600 mt-1 font-bold">{fieldErrors.ph}</p>}
                                     </div>
                                     <div>
-                                        <label className="block text-sm font-medium text-gray-700 mb-1">Moisture (%)</label>
+                                        <div className="flex justify-between items-center mb-1">
+                                            <label className="block text-sm font-medium text-gray-700">Moisture (%)</label>
+                                            <span className="text-[10px] font-bold text-green-600 bg-green-50 px-1.5 rounded-full border border-green-100">Range: 10 - 40</span>
+                                        </div>
                                         <input
                                             type="number"
                                             name="moisture"
                                             value={formData.moisture}
                                             onChange={handleInputChange}
-                                            className="w-full px-3 py-2 border border-gray-300 rounded focus:ring-green-500 focus:border-green-500"
-                                            placeholder="%"
+                                            className={`w-full px-3 py-2 border rounded focus:ring-green-500 focus:border-green-500 ${fieldErrors.moisture ? 'border-red-500 bg-red-50' : 'border-gray-300'}`}
+                                            placeholder="% (10 - 40)"
                                             required
                                         />
+                                        {fieldErrors.moisture && <p className="text-[10px] text-red-600 mt-1 font-bold">{fieldErrors.moisture}</p>}
                                     </div>
                                     <div>
-                                        <label className="block text-sm font-medium text-gray-700 mb-1">Organic Carbon (%)</label>
+                                        <div className="flex justify-between items-center mb-1">
+                                            <label className="block text-sm font-medium text-gray-700">Organic Carbon (%)</label>
+                                            <span className="text-[10px] font-bold text-green-600 bg-green-50 px-1.5 rounded-full border border-green-100">Range: 0.2 - 1.0</span>
+                                        </div>
                                         <input
                                             type="number"
                                             step="0.01"
                                             name="organic_carbon"
                                             value={formData.organic_carbon}
                                             onChange={handleInputChange}
-                                            className="w-full px-3 py-2 border border-gray-300 rounded focus:ring-green-500 focus:border-green-500"
-                                            placeholder="%"
+                                            className={`w-full px-3 py-2 border rounded focus:ring-green-500 focus:border-green-500 ${fieldErrors.organic_carbon ? 'border-red-500 bg-red-50' : 'border-gray-300'}`}
+                                            placeholder="% (0.2 - 1.0)"
                                             required
                                         />
+                                        {fieldErrors.organic_carbon && <p className="text-[10px] text-red-600 mt-1 font-bold">{fieldErrors.organic_carbon}</p>}
                                     </div>
                                     <div>
-                                        <label className="block text-sm font-medium text-gray-700 mb-1">Temperature (°C)</label>
+                                        <div className="flex justify-between items-center mb-1">
+                                            <label className="block text-sm font-medium text-gray-700">Temperature (°C)</label>
+                                            <span className="text-[10px] font-bold text-green-600 bg-green-50 px-1.5 rounded-full border border-green-100">Range: 14 - 30</span>
+                                        </div>
                                         <input
                                             type="number"
                                             name="temperature"
                                             value={formData.temperature}
                                             onChange={handleInputChange}
-                                            className="w-full px-3 py-2 border border-gray-300 rounded focus:ring-green-500 focus:border-green-500"
-                                            placeholder="°C"
+                                            className={`w-full px-3 py-2 border rounded focus:ring-green-500 focus:border-green-500 ${fieldErrors.temperature ? 'border-red-500 bg-red-50' : 'border-gray-300'}`}
+                                            placeholder="°C (14 - 30)"
                                         />
+                                        {fieldErrors.temperature && <p className="text-[10px] text-red-600 mt-1 font-bold">{fieldErrors.temperature}</p>}
+                                    </div>
+                                    <div>
+                                        <div className="flex justify-between items-center mb-1">
+                                            <label className="block text-sm font-medium text-gray-700">Growth Stage</label>
+                                            <span className="text-[10px] font-bold text-green-600 bg-green-50 px-1.5 rounded-full border border-green-100">Model Selector</span>
+                                        </div>
+                                        <select
+                                            name="stage"
+                                            value={formData.stage}
+                                            onChange={handleInputChange}
+                                            className="w-full px-3 py-2 border border-gray-300 rounded focus:ring-green-500 focus:border-green-500 bg-white"
+                                            required
+                                        >
+                                            <option value="">Select Stage</option>
+                                            <option value="germination">Germination model</option>
+                                            <option value="booting">Booting model</option>
+                                            <option value="ripening">Ripening model</option>
+                                        </select>
                                     </div>
                                 </div>
                             </div>

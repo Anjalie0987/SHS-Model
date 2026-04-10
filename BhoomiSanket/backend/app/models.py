@@ -1,4 +1,5 @@
 from sqlalchemy import Column, Integer, String, Float, DateTime
+from sqlalchemy.sql import func
 from app.database import Base
 from datetime import datetime
 
@@ -99,3 +100,32 @@ class SoilGerminationData(Base):
     temperature = Column(Float)
     shs_germination = Column(Float)
     category_germination = Column(String)
+
+class LatLonSuitability(Base):
+    __tablename__ = "latlon_suitability"
+
+    id = Column(Integer, primary_key=True, index=True)
+    batch_id = Column(String, index=True, nullable=False)  # group a processing run
+    source_file = Column(String, nullable=False)
+
+    # Original input columns (store as-is)
+    lat = Column(Float, nullable=False)
+    lon = Column(Float, nullable=False)
+    n = Column(Float, nullable=True)
+    p = Column(Float, nullable=True)
+    k = Column(Float, nullable=True)
+    moisture = Column(Float, nullable=True)
+    ph = Column(Float, nullable=True)
+    oc = Column(Float, nullable=True)
+    temp = Column(Float, nullable=True)
+    ndvi = Column(Float, nullable=True)  # may be injected for booting if missing
+
+    # Outputs (both stages)
+    germ_shs = Column(Float, nullable=True)
+    germ_category = Column(String, nullable=True)
+    boot_shs = Column(Float, nullable=True)
+    boot_category = Column(String, nullable=True)
+    rip_shs = Column(Float, nullable=True)
+    rip_category = Column(String, nullable=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())

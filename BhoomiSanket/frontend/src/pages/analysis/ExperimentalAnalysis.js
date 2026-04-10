@@ -617,16 +617,7 @@ const ExperimentalAnalysis = () => {
                                     />
                                     <span className="group-hover:text-green-700 transition-colors">Districts</span>
                                 </label>
-                                <label className="flex items-center gap-2 cursor-pointer group text-[13px] text-gray-700">
-                                    <input
-                                        type="checkbox"
-                                        checked={showSubdistricts}
-                                        onChange={(e) => setShowSubdistricts(e.target.checked)}
-                                        className="w-3.5 h-3.5 text-green-600 border-gray-300 rounded focus:ring-green-500 cursor-pointer"
-                                    />
-                                    <span className="group-hover:text-green-700 transition-colors">Sub-districts</span>
-                                    {showSubdistricts && loading && <span className="animate-pulse text-[9px] text-orange-500 font-bold ml-1">Loading...</span>}
-                                </label>
+
                             </div>
 
                             <div className="pt-2 border-t border-gray-100 flex items-center justify-between gap-4">

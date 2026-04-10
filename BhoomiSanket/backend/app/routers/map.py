@@ -215,7 +215,11 @@ def get_latlon_suitability_points(limit: int = 5000, batch_id: str = Query(None)
         if batch_id:
             cur.execute(
                 """
-                SELECT lat, lon, germ_shs, germ_category, boot_shs, boot_category, batch_id, source_file, created_at
+                SELECT lat, lon,
+                       germ_shs, germ_category,
+                       boot_shs, boot_category,
+                       rip_shs, rip_category,
+                       batch_id, source_file, created_at
                 FROM latlon_suitability
                 WHERE batch_id = %s
                 ORDER BY created_at DESC
@@ -226,7 +230,11 @@ def get_latlon_suitability_points(limit: int = 5000, batch_id: str = Query(None)
         else:
             cur.execute(
                 """
-                SELECT lat, lon, germ_shs, germ_category, boot_shs, boot_category, batch_id, source_file, created_at
+                SELECT lat, lon,
+                       germ_shs, germ_category,
+                       boot_shs, boot_category,
+                       rip_shs, rip_category,
+                       batch_id, source_file, created_at
                 FROM latlon_suitability
                 ORDER BY created_at DESC
                 LIMIT %s
@@ -243,9 +251,10 @@ def get_latlon_suitability_points(limit: int = 5000, batch_id: str = Query(None)
                     "lon": float(r[1]),
                     "germination": {"shs": r[2], "category": r[3]},
                     "booting": {"shs": r[4], "category": r[5]},
-                    "batch_id": r[6],
-                    "source_file": r[7],
-                    "created_at": r[8].isoformat() if r[8] else None,
+                    "ripening": {"shs": r[6], "category": r[7]},
+                    "batch_id": r[8],
+                    "source_file": r[9],
+                    "created_at": r[10].isoformat() if r[10] else None,
                 }
             )
 

@@ -157,15 +157,7 @@ const MapLanding = () => {
                                 />
                                 <span className="text-sm font-medium text-gray-700 group-hover:text-green-700 transition-colors">Districts</span>
                             </label>
-                            <label className="flex items-center gap-3 cursor-pointer group">
-                                <input
-                                    type="checkbox"
-                                    checked={showSubdistricts}
-                                    onChange={(e) => setShowSubdistricts(e.target.checked)}
-                                    className="w-4 h-4 text-green-600 border-gray-300 rounded focus:ring-green-500"
-                                />
-                                <span className="text-sm font-medium text-gray-700 group-hover:text-green-700 transition-colors">Sub-districts</span>
-                            </label>
+
                         </div>
 
                         {/* Navigation Controls */}

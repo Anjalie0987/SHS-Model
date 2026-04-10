@@ -27,3 +27,13 @@ yarn-error.log*
 # Miscellaneous
 .DS_Store
 Thumbs.db
+
+# Python temporary files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.env

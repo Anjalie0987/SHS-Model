@@ -7,7 +7,8 @@ import logging
 import os
 import uuid
 from app.database import get_db
-from app.models import WheatGerminationSHS, WheatBootingSHS, LatLonSuitability
+from app.models import WheatGerminationSHS, WheatBootingSHS, WheatRipeningSHS, LatLonSuitability
+from app.model.wheat_shs_engine import WheatSHSEngine
 
 router = APIRouter()
 
@@ -20,6 +21,7 @@ logger = logging.getLogger("WheatSHSEngine")
 
 # NEW: lat-long germination pipeline defaults (only used by the new local-file processor)
 DEFAULT_BOOTING_NDVI = 0.7
+DEFAULT_RIPENING_NDVI = 0.6
 
 # NEW: file-based processing folders (no UI upload needed)
 APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -142,104 +144,29 @@ def ndvi_membership(ndvi):
 # ==========================================================
 
 def classify_score(score):
-    if score >= 90:
-        return "Excellent"
-    elif score >= 80:
-        return "Very Good"
-    elif score >= 70:
+    if score >= 75:
         return "Good"
-    elif score >= 60:
-        return "Moderate"
-    elif score >= 30:
-        return "Poor"
-    return "Very Poor"
+    elif score >= 50:
+        return "Fair"
+    return "Poor"
 
-# ==========================================================
-# INPUT VALIDATION
-# ==========================================================
+def _run_stage_engine(df: pd.DataFrame, stage: str) -> pd.DataFrame:
+    """
+    Runs Adarsh's engine for the given stage and returns a dataframe with:
+    - SHS (numeric)
+    - Category (derived locally for DB/backward compatibility; frontend can ignore)
+    - Error_<stage> passthrough (if engine provided it)
+    """
+    engine = WheatSHSEngine(stage)
+    out = engine.run_dataset(df)
 
-def validate_input(sample, stage):
-    required = ["N","P","K","Moisture","pH","OC","Temp"]
-    if stage == "booting":
-        required.append("NDVI")
-    for field in required:
-        if field not in sample:
-            raise ValueError(f"Missing field: {field}")
-        if pd.isna(sample[field]):
-            raise ValueError(f"Missing value for {field}")
+    shs_col = f"SHS_{stage}"
+    if shs_col not in out.columns:
+        raise ValueError(f"Expected column '{shs_col}' from engine output")
 
-# ==========================================================
-# MAIN ENGINE
-# ==========================================================
-
-class WheatSHSEngine:
-    def __init__(self, stage):
-        logger.info(f"Initializing SHS Engine for stage: {stage}")
-        if stage not in ["germination","booting"]:
-            raise ValueError("Stage must be 'germination' or 'booting'")
-        self.stage = stage
-        if stage == "germination":
-            self.criteria = ["N","P","K","Moisture","pH","OC","Temp"]
-            self.matrix = GERMINATION_MATRIX
-        else:
-            self.criteria = ["N","P","K","Moisture","pH","OC","Temp","NDVI"]
-            self.matrix = BOOTING_MATRIX
-        self.weights = self.compute_weights()
-
-    def compute_weights(self):
-        col_sum = self.matrix.sum(axis=0)
-        norm_matrix = self.matrix / col_sum
-        weights = norm_matrix.mean(axis=1)
-        logger.info("AHP weights computed")
-        return weights
-
-    def compute_shs(self, fuzzy_scores):
-        return float(np.dot(fuzzy_scores, self.weights) * 100)
-
-    def predict(self, sample):
-        validate_input(sample, self.stage)
-        if self.stage == "germination":
-            fuzzy_scores = np.array([
-                nitrogen_membership(sample["N"]),
-                phosphorus_membership(sample["P"]),
-                potassium_membership(sample["K"]),
-                moisture_membership(sample["Moisture"]),
-                ph_membership(sample["pH"]),
-                oc_membership(sample["OC"]),
-                temp_membership(sample["Temp"])
-            ])
-        else:
-            fuzzy_scores = np.array([
-                nitrogen_membership(sample["N"]),
-                phosphorus_membership(sample["P"]),
-                potassium_membership(sample["K"]),
-                moisture_membership(sample["Moisture"]),
-                ph_membership(sample["pH"]),
-                oc_membership(sample["OC"]),
-                temp_membership(sample["Temp"]),
-                ndvi_membership(sample["NDVI"])
-            ])
-        shs = self.compute_shs(fuzzy_scores)
-        category = classify_score(shs)
-        return {
-            "stage": self.stage,
-            "shs": round(shs,2),
-            "category": category
-        }
-
-    def run_dataset(self, df):
-        logger.info(f"Processing dataset with {len(df)} rows")
-        results = []
-        for _, row in df.iterrows():
-            try:
-                result = self.predict(row)
-                results.append(result["shs"])
-            except Exception as e:
-                logger.warning(f"Row skipped: {e}")
-                results.append(None)
-        df["SHS"] = results
-        df["Category"] = df["SHS"].apply(lambda x: classify_score(x) if pd.notna(x) else None)
-        return df
+    out["SHS"] = out[shs_col]
+    out["Category"] = out["SHS"].apply(lambda x: classify_score(x) if pd.notna(x) else None)
+    return out
 
 # ==========================================================
 # API ENDPOINTS
@@ -247,8 +174,8 @@ class WheatSHSEngine:
 
 @router.post("/process-csv")
 async def process_csv(file: UploadFile = File(...), stage: str = "germination", db: Session = Depends(get_db)):
-    if stage not in ["germination", "booting"]:
-        raise HTTPException(status_code=400, detail="Stage must be 'germination' or 'booting'")
+    if stage not in ["germination", "booting", "ripening"]:
+        raise HTTPException(status_code=400, detail="Stage must be 'germination', 'booting', or 'ripening'")
     
     try:
         df = pd.read_csv(file.file)
@@ -264,22 +191,32 @@ async def process_csv(file: UploadFile = File(...), stage: str = "germination", 
     
     if df.empty:
         raise HTTPException(status_code=400, detail="No data for Maharashtra found")
-    
-    engine = WheatSHSEngine(stage)
-    processed_df = engine.run_dataset(df)
+
+    # Ripening and booting require NDVI (engine will validate)
+    processed_df = _run_stage_engine(df, stage)
     
     # ------------------------------------------------------------------
     # CSV OUTPUT (non-invasive: DB write logic remains unchanged)
     # ------------------------------------------------------------------
     try:
-        output_filename = "germination_output_with_shs_avg_category.csv" if stage == "germination" else "booting_output_with_shs_avg_category.csv"
+        if stage == "germination":
+            output_filename = "germination_output_with_shs_avg_category.csv"
+        elif stage == "booting":
+            output_filename = "booting_output_with_shs_avg_category.csv"
+        else:
+            output_filename = "ripening_output_with_shs_avg_category.csv"
         output_path = os.path.join(OUTPUTS_DIR, output_filename)
         _write_standard_output_csv(processed_df, original_columns, stage, output_path)
     except Exception as e:
         logger.warning(f"Failed to write SHS output CSV for stage '{stage}': {e}")
 
     # Store results in DB (separate tables per stage)
-    Model = WheatGerminationSHS if stage == "germination" else WheatBootingSHS
+    if stage == "germination":
+        Model = WheatGerminationSHS
+    elif stage == "booting":
+        Model = WheatBootingSHS
+    else:
+        Model = WheatRipeningSHS
 
     stored_count = 0
     for _, row in processed_df.iterrows():
@@ -312,7 +249,8 @@ def process_csv_from_data(
     This does NOT modify existing upload behavior.
     """
     if stage not in ["germination", "booting"]:
-        raise HTTPException(status_code=400, detail="stage must be 'germination' or 'booting'")
+        if stage != "ripening":
+            raise HTTPException(status_code=400, detail="stage must be 'germination', 'booting', or 'ripening'")
 
     csv_path = _safe_join_csv(DATA_DIR, filename)
     try:
@@ -328,19 +266,28 @@ def process_csv_from_data(
     if df.empty:
         raise HTTPException(status_code=400, detail="No data for Maharashtra found")
 
-    engine = WheatSHSEngine(stage)
-    processed_df = engine.run_dataset(df)
+    processed_df = _run_stage_engine(df, stage)
 
     # Output CSV (same naming pattern as existing pipeline)
     try:
-        output_filename = "germination_output_with_shs_avg_category.csv" if stage == "germination" else "booting_output_with_shs_avg_category.csv"
+        if stage == "germination":
+            output_filename = "germination_output_with_shs_avg_category.csv"
+        elif stage == "booting":
+            output_filename = "booting_output_with_shs_avg_category.csv"
+        else:
+            output_filename = "ripening_output_with_shs_avg_category.csv"
         output_path = os.path.join(OUTPUTS_DIR, output_filename)
         _write_standard_output_csv(processed_df, original_columns, stage, output_path)
     except Exception as e:
         logger.warning(f"Failed to write SHS output CSV for stage '{stage}': {e}")
 
     # DB insert (same as existing upload pipeline)
-    Model = WheatGerminationSHS if stage == "germination" else WheatBootingSHS
+    if stage == "germination":
+        Model = WheatGerminationSHS
+    elif stage == "booting":
+        Model = WheatBootingSHS
+    else:
+        Model = WheatRipeningSHS
     stored_count = 0
     for _, row in processed_df.iterrows():
         if pd.notna(row["SHS"]):
@@ -399,27 +346,27 @@ def process_latlon_local(
     if missing:
         raise HTTPException(status_code=400, detail=f"Missing columns: {missing}. Found: {list(df.columns)}")
 
-    # Booting requires NDVI. If absent, inject a demo default (only for this new pipeline).
+    # Booting/Ripening require NDVI. If absent, inject a demo default (only for this new pipeline).
     if "NDVI" not in df.columns:
         df["NDVI"] = DEFAULT_BOOTING_NDVI
 
     batch_id = str(uuid.uuid4())
 
     # Run germination
-    germ_df = df.copy()
-    germ_engine = WheatSHSEngine("germination")
-    germ_df = germ_engine.run_dataset(germ_df)  # adds SHS + Category
+    germ_df = _run_stage_engine(df.copy(), "germination")
 
     # Run booting
-    boot_df = df.copy()
-    boot_engine = WheatSHSEngine("booting")
-    boot_df = boot_engine.run_dataset(boot_df)  # adds SHS + Category
+    boot_df = _run_stage_engine(df.copy(), "booting")
+
+    # Run ripening
+    rip_df = _run_stage_engine(df.copy(), "ripening")
 
     stored = 0
     for idx in range(len(df)):
         row_in = df.iloc[idx]
         row_g = germ_df.iloc[idx]
         row_b = boot_df.iloc[idx]
+        row_r = rip_df.iloc[idx]
 
         rec = LatLonSuitability(
             batch_id=batch_id,
@@ -438,6 +385,8 @@ def process_latlon_local(
             germ_category=str(row_g["Category"]) if pd.notna(row_g.get("Category")) else None,
             boot_shs=float(row_b["SHS"]) if pd.notna(row_b.get("SHS")) else None,
             boot_category=str(row_b["Category"]) if pd.notna(row_b.get("Category")) else None,
+            rip_shs=float(row_r["SHS"]) if pd.notna(row_r.get("SHS")) else None,
+            rip_category=str(row_r["Category"]) if pd.notna(row_r.get("Category")) else None,
         )
         db.add(rec)
         stored += 1
@@ -451,11 +400,13 @@ def process_latlon_local(
         out_df["germ_category"] = germ_df["Category"]
         out_df["boot_shs"] = boot_df["SHS"]
         out_df["boot_category"] = boot_df["Category"]
+        out_df["rip_shs"] = rip_df["SHS"]
+        out_df["rip_category"] = rip_df["Category"]
 
         out_path = os.path.join(OUTPUTS_DIR, "latlon_output_with_shs_avg_category.csv")
         # Keep input columns, plus new output columns
         final_cols = list(original_columns)
-        for col in ["germ_shs", "germ_category", "boot_shs", "boot_category"]:
+        for col in ["germ_shs", "germ_category", "boot_shs", "boot_category", "rip_shs", "rip_category"]:
             if col not in final_cols:
                 final_cols.append(col)
         out_df.to_csv(out_path, index=False, columns=final_cols)
@@ -507,3 +458,11 @@ def get_booting_districts(db: Session = Depends(get_db)):
     Aggregated SHS per district for the booting stage.
     """
     return _aggregate_districts(WheatBootingSHS, db)
+
+
+@router.get("/districts/ripening")
+def get_ripening_districts(db: Session = Depends(get_db)):
+    """
+    Aggregated SHS per district for the ripening stage.
+    """
+    return _aggregate_districts(WheatRipeningSHS, db)

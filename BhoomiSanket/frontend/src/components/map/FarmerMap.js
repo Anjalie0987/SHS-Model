@@ -3,6 +3,7 @@ import { MapContainer, Marker, Popup, useMap, CircleMarker, useMapEvents } from 
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import { INDIA_CENTER, DEFAULT_ZOOM } from '../../data/geoBounds';
+import { getShsColor } from '../../utils/colorUtils';
 
 // Fix for default marker icon in Leaflet
 delete L.Icon.Default.prototype._getIconUrl;
@@ -28,7 +29,7 @@ const STYLES = {
 };
 
 // Helper component to handle GeoJSON lifecycle & updates
-const GeoJsonController = ({ data, onRegionSelect }) => {
+const GeoJsonController = ({ data, onRegionSelect, analysisResult, activeRegion, activeStage }) => {
     const map = useMap();
     const geoJsonLayerRef = useRef(null);
 
@@ -65,10 +66,31 @@ const GeoJsonController = ({ data, onRegionSelect }) => {
                 },
                 mousemove: (e) => {
                     const { lat, lng } = e.latlng;
-                    const tooltipHtml = `
-                        <div class="p-2 min-w-[100px]">
+                    const isResultRegion = analysisResult && activeRegion && regionName.toUpperCase() === activeRegion.toUpperCase();
+                    const score = isResultRegion ? (
+                        activeStage === 'germination' ? analysisResult.germ_shs : 
+                        activeStage === 'booting' ? analysisResult.boot_shs : 
+                        analysisResult.rip_shs
+                    ) : null;
+
+                    let tooltipHtml = `
+                        <div class="p-2 min-w-[120px]">
                             <div class="text-[10px] font-bold text-gray-400 uppercase">${regionType}</div>
                             <div class="text-sm font-bold text-gray-800">${regionName}</div>
+                    `;
+
+                    if (isResultRegion && score !== null) {
+                        tooltipHtml += `
+                            <div class="mt-2 py-1 border-t border-gray-100">
+                                <div class="flex justify-between items-center gap-4">
+                                    <span class="text-[10px] text-gray-500 font-medium">Suitability Score:</span>
+                                    <span class="text-xs font-bold text-green-700">${score.toFixed(2)}%</span>
+                                </div>
+                            </div>
+                        `;
+                    }
+
+                    tooltipHtml += `
                             <div class="text-[10px] text-gray-500 mt-1 border-t pt-1">
                                 Lat: ${lat.toFixed(4)}, Lng: ${lng.toFixed(4)}
                             </div>
@@ -93,7 +115,28 @@ const GeoJsonController = ({ data, onRegionSelect }) => {
 
         // Create new layer
         geoJsonLayerRef.current = L.geoJson(data, {
-            style: STYLES.default,
+            style: (feature) => {
+                const props = feature.properties;
+                const regionName = (props.TEHSIL || props.TEHSIL_NAM || props.sub_dist ||
+                    props.DISTRICT || props.DIST_NAME || props.dtname || props.District ||
+                    props.STATE || props.ST_NAME || props.ST_NM || props.State || 'Region').trim();
+
+                // Check if this is the active region we just analyzed
+                if (analysisResult && activeRegion && regionName.toUpperCase() === activeRegion.toUpperCase()) {
+                    const score = activeStage === 'germination' ? analysisResult.germ_shs : 
+                                  activeStage === 'booting' ? analysisResult.boot_shs : 
+                                  analysisResult.rip_shs;
+                    return {
+                        ...STYLES.default,
+                        fillColor: getShsColor(activeStage, score),
+                        fillOpacity: 0.8, // More prominent
+                        weight: 3,
+                        color: "#000" // Black border for results
+                    };
+                }
+
+                return STYLES.default;
+            },
             onEachFeature: onEachFeature
         }).addTo(map);
 
@@ -115,7 +158,7 @@ const GeoJsonController = ({ data, onRegionSelect }) => {
                 map.removeLayer(geoJsonLayerRef.current);
             }
         };
-    }, [data, map, onRegionSelect]);
+    }, [data, map, onRegionSelect, analysisResult, activeRegion, activeStage]);
 
     return null;
 };
@@ -182,7 +225,7 @@ const LocationMarker = ({ position, setPosition }) => {
     );
 };
 
-const FarmerMap = ({ boundaryGeoJSON, onLocationSelect, onRegionSelect }) => {
+const FarmerMap = ({ boundaryGeoJSON, onLocationSelect, onRegionSelect, analysisResult, activeRegion, activeStage }) => {
     // Local state for marker if not controlled by parent
     const [markerPos, setMarkerPos] = useState(null);
 
@@ -215,9 +258,43 @@ const FarmerMap = ({ boundaryGeoJSON, onLocationSelect, onRegionSelect }) => {
                 <GeoJsonController
                     data={boundaryGeoJSON}
                     onRegionSelect={onRegionSelect}
+                    analysisResult={analysisResult}
+                    activeRegion={activeRegion}
+                    activeStage={activeStage}
                 />
 
                 <LocationMarker position={markerPos} setPosition={handleMarkerSet} />
+
+                {/* Floating Legend - Only show after analysis */}
+                {analysisResult && (
+                    <div className="absolute bottom-6 left-6 bg-white/95 p-4 rounded-2xl shadow-xl z-[1000] border border-green-100 min-w-[220px] animate-in fade-in slide-in-from-bottom-4 duration-500">
+                        <h4 className="text-[13px] font-black text-slate-700 mb-3 tracking-tight border-b border-slate-100 pb-2 flex items-center gap-2">
+                            <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+                            {activeStage?.toUpperCase()} SUITABILITY
+                        </h4>
+                        <div className="space-y-2.5">
+                            {[
+                                { label: 'Excellent', range: activeStage === 'booting' ? '(>84.6%)' : activeStage === 'ripening' ? '(>78.5%)' : '(>78%)', color: '#1a9850' },
+                                { label: 'Very Good', range: activeStage === 'booting' ? '(84.4-84.6%)' : activeStage === 'ripening' ? '(78.0-78.5%)' : '(77-78%)', color: '#66bd63' },
+                                { label: 'Good', range: activeStage === 'booting' ? '(84.2-84.4%)' : activeStage === 'ripening' ? '(77.5-78.0%)' : '(76-77%)', color: '#a6d96a' },
+                                { label: 'Moderate', range: activeStage === 'booting' ? '(84.0-84.2%)' : activeStage === 'ripening' ? '(77.0-77.5%)' : '(75-76%)', color: '#fee08b' },
+                                { label: 'Poor', range: activeStage === 'booting' ? '(83.8-84.0%)' : activeStage === 'ripening' ? '(76.5-77.0%)' : '(74-75%)', color: '#fdae61' },
+                                { label: 'Very Poor', range: activeStage === 'booting' ? '(<83.8%)' : activeStage === 'ripening' ? '(<76.5%)' : '(<74%)', color: '#d73027' }
+                            ].map((item, idx) => (
+                                <div key={idx} className="flex items-center gap-3">
+                                    <div 
+                                        className="w-4 h-4 rounded-sm shadow-sm border border-black/5" 
+                                        style={{ backgroundColor: item.color }}
+                                    ></div>
+                                    <div className="flex items-baseline gap-1.5">
+                                        <span className="text-[12px] font-bold text-slate-600">{item.label}</span>
+                                        <span className="text-[10px] text-slate-400 font-medium">{item.range}</span>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
 
                 {/* Overlay instruction */}
                 <div className="absolute top-4 right-4 bg-white/90 p-2 rounded shadow-md z-[1000] text-xs max-w-[200px]">

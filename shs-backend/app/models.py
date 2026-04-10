@@ -27,6 +27,18 @@ class WheatBootingSHS(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
+class WheatRipeningSHS(Base):
+    __tablename__ = "wheat_shs_ripening"
+
+    id = Column(Integer, primary_key=True, index=True)
+    pixel_id = Column(String, nullable=True)
+    district = Column(String, nullable=False)
+    state = Column(String, nullable=False)
+    shs = Column(Float, nullable=False)
+    category = Column(String, nullable=False)  # Good, Fair, Poor
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
 # NEW: lat-long germination+booting pipeline (separate table; does not mix with existing district-based records)
 class LatLonSuitability(Base):
     __tablename__ = "latlon_suitability"
@@ -52,5 +64,7 @@ class LatLonSuitability(Base):
     germ_category = Column(String, nullable=True)
     boot_shs = Column(Float, nullable=True)
     boot_category = Column(String, nullable=True)
+    rip_shs = Column(Float, nullable=True)
+    rip_category = Column(String, nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
