@@ -150,91 +150,77 @@ const VectorBoundaryLayer = ({ state, district, selectedAttribute, matchedSubdis
 
     }, [state, district]);
 
-    // Handle Rendering and Zooming
-    useEffect(() => {
-        if (!geoJsonData) return;
+    const style = (feature) => {
+        const backendKey = getBackendKey(selectedAttribute);
+        const val = feature.properties[backendKey];
 
-        if (layerRef.current) {
-            map.removeLayer(layerRef.current);
+        // Robust name detection for highlighting (State/District/Subdistrict)
+        const featureName = (feature.properties.District || feature.properties.DISTRICT || feature.properties.DIST_NAME || feature.properties.dtname ||
+            feature.properties.TEHSIL || feature.properties.SUB_DIST || feature.properties.sdtname ||
+            feature.properties.STATE || feature.properties.ST_NM || feature.properties.stname || "Region").trim().toUpperCase();
+
+        // If filter is active, grey out non-matching regions
+        const isFilterActive = matchedSubdistricts && matchedSubdistricts.length > 0;
+        if (isFilterActive) {
+            const isMatch = matchedSubdistricts.some(name =>
+                name.toUpperCase() === featureName
+            );
+            if (!isMatch) {
+                return {
+                    fillColor: '#d0d0d0',
+                    fillOpacity: 0.2,
+                    color: '#666',
+                    weight: 0.5,
+                    opacity: 0.5
+                };
+            }
         }
 
+        return {
+            fillColor: val !== undefined ? getColor(selectedAttribute, val) : '#f3f4f6',
+            fillOpacity: val !== undefined ? 0.75 : 0.05,
+            color: '#666',
+            weight: 1,
+            opacity: 1
+        };
+    };
+
+    const onEachFeature = (feature, layer) => {
         const backendKey = getBackendKey(selectedAttribute);
-        console.log(`Choropleth Mode: ${selectedAttribute} -> ${backendKey}`);
+        const props = feature.properties;
+        const name = props.TEHSIL || props.SUB_DIST || props.DISTRICT || props.DIST_NAME || props.STATE || props.ST_NM || "Region";
+        const val = props[backendKey];
 
-        // Check if query filter is active
-        const isFilterActive = matchedSubdistricts && matchedSubdistricts.length > 0;
-
-        const style = (feature) => {
-            const val = feature.properties[backendKey];
-
-            // Robust name detection for highlighting (State/District/Subdistrict)
-            const featureName = (feature.properties.District || feature.properties.DISTRICT || feature.properties.DIST_NAME || feature.properties.dtname ||
-                feature.properties.TEHSIL || feature.properties.SUB_DIST || feature.properties.sdtname ||
-                feature.properties.STATE || feature.properties.ST_NM || feature.properties.stname || "Region").trim().toUpperCase();
-
-            // If filter is active, grey out non-matching regions
-            if (isFilterActive) {
-                const isMatch = matchedSubdistricts.some(name =>
-                    name.toUpperCase() === featureName
-                );
-                if (!isMatch) {
-                    return {
-                        fillColor: '#d0d0d0',
-                        fillOpacity: 0.2,
-                        color: '#666',
-                        weight: 0.5,
-                        opacity: 0.5
-                    };
-                }
-            }
-
-            return {
-                fillColor: val !== undefined ? getColor(selectedAttribute, val) : '#f3f4f6',
-                fillOpacity: val !== undefined ? 0.75 : 0.05,
-                color: '#666',
-                weight: 1,
-                opacity: 1
-            };
-        };
-
-        const onEachFeature = (feature, layer) => {
-            const props = feature.properties;
-            const name = props.TEHSIL || props.SUB_DIST || props.DISTRICT || props.DIST_NAME || props.STATE || props.ST_NM || "Region";
-            const val = props[backendKey];
-
-            if (val !== undefined) {
-                layer.bindPopup(`
-                    <div class="font-sans">
-                        <h3 class="font-bold text-sm border-b pb-1 mb-1">${name}</h3>
-                        <div class="text-sm">
-                            <span class="text-gray-600 capitalize">${selectedAttribute}:</span> 
-                            <span class="font-bold text-green-700">${typeof val === 'number' ? val.toFixed(2) : val}</span>
-                        </div>
+        if (val !== undefined) {
+            layer.bindPopup(`
+                <div class="font-sans">
+                    <h3 class="font-bold text-sm border-b pb-1 mb-1">${name}</h3>
+                    <div class="text-sm">
+                        <span class="text-gray-600 capitalize">${selectedAttribute}:</span> 
+                        <span class="font-bold text-green-700">${typeof val === 'number' ? val.toFixed(2) : val}</span>
                     </div>
-                 `);
-            }
-        };
+                </div>
+             `);
+        }
+        layer.bindTooltip("", { sticky: true, className: 'custom-map-tooltip' });
+    };
 
-        const layer = L.geoJSON(geoJsonData, {
-            style,
-            onEachFeature
-        });
-
-        layer.addTo(map);
-        // layer.bringToBack(); // No need to push to back if markers are gone, but good practice if mixed
-
-        layerRef.current = layer;
-
+    // Auto-fit bounds when data changes
+    useEffect(() => {
+        if (!geoJsonData || !map) return;
+        const layer = L.geoJSON(geoJsonData);
         if (layer.getLayers().length > 0) {
             map.fitBounds(layer.getBounds(), { padding: [20, 20] });
         }
+    }, [geoJsonData, map]);
 
-        return () => {
-            if (layerRef.current) map.removeLayer(layerRef.current);
-        };
-    }, [geoJsonData, map, selectedAttribute, matchedSubdistricts]); // Re-render when selectedAttribute or filter changes
+    // Use a complex key that changes whenever data dependencies change.
+    // This ensures the layer re-renders (and binds fresh listeners/styles) when state changes.
+    const dataKey = useMemo(() => {
+        return `${state}-${district}-${selectedAttribute}-${!!matchedSubdistricts}-${!!geoJsonData}`;
+    }, [state, district, selectedAttribute, matchedSubdistricts, geoJsonData]);
 
-    return null;
+    return <GeoJSON ref={layerRef} key={dataKey} data={geoJsonData} style={style} onEachFeature={onEachFeature} />;
 };
 
 // Auto-fit bounds for farm points if they exist (and ensure appropriate zoom)
@@ -364,6 +350,8 @@ const AnalysisPage = () => {
                     <MapContainer
                         center={INDIA_CENTER}
                         zoom={DEFAULT_ZOOM}
+                        zoomSnap={0.1}
+                        zoomDelta={0.1}
                         style={{ height: '100%', width: '100%', background: '#fff' }}
                         zoomControl={false}
                     >

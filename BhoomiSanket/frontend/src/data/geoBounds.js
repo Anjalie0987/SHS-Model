@@ -1,8 +1,8 @@
 // Mock data for India States and Districts bounds/centers
 // Approximated for demo purposes
 
-export const INDIA_CENTER = [20.5937, 78.9629];
-export const DEFAULT_ZOOM = 5;
+export const INDIA_CENTER = [22.8, 78.0];
+export const DEFAULT_ZOOM = 4.7;
 
 export const STATE_DATA = {
     "PB": {

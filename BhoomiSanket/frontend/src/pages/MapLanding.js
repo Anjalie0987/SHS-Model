@@ -124,6 +124,8 @@ const MapLanding = () => {
                     <MapContainer
                         center={INDIA_CENTER}
                         zoom={DEFAULT_ZOOM}
+                        zoomSnap={0.1}
+                        zoomDelta={0.1}
                         style={{ height: '100%', width: '100%', background: '#fff' }}
                         zoomControl={false}
                     >

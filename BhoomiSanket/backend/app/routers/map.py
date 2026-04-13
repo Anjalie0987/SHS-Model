@@ -33,18 +33,47 @@ def load_and_simplify_shapefile(path):
     try:
         gdf = gpd.read_file(path)
         
-        # Correct common spelling errors in district names
+        # Correct common spelling errors mapped explicitly
         corrections = {
             'AHAMADNAGAR': 'AHMEDNAGAR',
             'RAYGAD': 'RAIGAD',
             'SUB URBAN MUMBAI': 'MUMBAI SUBURBAN',
             'MUMBAI CITY': 'MUMBAI',
-            # Add more corrections as needed
+            'ANDAMAN & NICOBAR': 'ANDAMAN AND NICOBAR ISLANDS',
+            'ANDAMAN & NICOBAR ISLAND': 'ANDAMAN AND NICOBAR ISLANDS',
+            'JAMMU & KASHMIR': 'JAMMU AND KASHMIR',
+            'DADRA & NAGAR HAVELI & DAMAN & DIU': 'DADRA AND NAGAR HAVELI AND DAMAN AND DIU'
         }
-        if 'District' in gdf.columns:
-            gdf['District'] = gdf['District'].replace(corrections)
-            # Normalize to title case
-            gdf['District'] = gdf['District'].str.title()
+        
+        # Generic text normalization for ALL location columns
+        location_columns = [
+            'STATE', 'ST_NM', 'State_Name', 'StateName', 'stname',
+            'DISTRICT', 'DIST_NAME', 'District', 'District_Name', 'DistName', 'dtname',
+            'TEHSIL', 'TEHSIL_NAM', 'SUB_DIST', 'SubDistrict', 'Tehsil', 'sdtname'
+        ]
+        
+        for col in location_columns:
+            if col in gdf.columns:
+                # First apply explicit corrections (uppercase matches only)
+                gdf[col] = gdf[col].replace(corrections)
+                
+                # Robust string replacement: turn "&" to "and"
+                gdf[col] = gdf[col].astype(str).str.replace('&', 'and', regex=False)
+                
+                # Fix corrupted character encodings in shapefile strings (e.g., "Al|R>Jpur" -> "Alirajpur")
+                gdf[col] = gdf[col].str.replace('>', 'A', regex=False)
+                gdf[col] = gdf[col].str.replace('<', 'A', regex=False)
+                gdf[col] = gdf[col].str.replace('|', 'I', regex=False)
+                gdf[col] = gdf[col].str.replace('\\', 'I', regex=False)
+                gdf[col] = gdf[col].str.replace('@', 'U', regex=False)
+                gdf[col] = gdf[col].str.replace('#', 'U', regex=False)
+                
+                # Normalize spaces and Title Case
+                gdf[col] = gdf[col].str.strip().str.title()
+                
+                # Fix 'And' -> 'and' inside the string
+                gdf[col] = gdf[col].str.replace(' And ', ' and ', regex=False)
+
         
         # Adaptive Simplification Logic - Done ONCE during load
         count = len(gdf)

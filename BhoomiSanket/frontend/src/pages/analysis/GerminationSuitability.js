@@ -336,6 +336,39 @@ const VectorBoundaryLayer = ({ type, visible, weight = 1.5, color = '#9e9e9e', m
             .catch(err => console.error(`Error fetching ${type} overlay:`, err));
     }, [type, visible]);
 
+
+    // Pre-calculate normalized mapping for faster style lookup
+    const normalizedData = useMemo(() => {
+        const stage = selectedAttribute === 'shs_germination' ? 'germination' : (selectedAttribute === 'shs_booting' ? 'booting' : 'ripening');
+        const shsData = (stage === 'germination') ? shsGermData : (stage === 'booting' ? shsBootData : shsRipData);
+        
+        const norm = {};
+        if (shsData) {
+            Object.entries(shsData).forEach(([k, v]) => {
+                norm[k.trim().toLowerCase()] = v;
+            });
+        }
+        return norm;
+    }, [selectedAttribute, shsGermData, shsBootData, shsRipData]);
+
+    const normalizedSoil = useMemo(() => {
+        const norm = {};
+        if (soilData) {
+            Object.entries(soilData).forEach(([k, v]) => {
+                norm[k.trim().toLowerCase()] = v;
+            });
+        }
+        return norm;
+    }, [soilData]);
+
+    // Use a complex key that changes whenever data dependencies change.
+    // This forces a full refresh of the GeoJSON layer (and its listeners) when data loads.
+    const dataKey = useMemo(() => {
+        const stage = selectedAttribute === 'shs_germination' ? 'germination' : (selectedAttribute === 'shs_booting' ? 'booting' : 'ripening');
+        const shsAvailable = (stage === 'germination') ? !!shsGermData : (stage === 'booting' ? !!shsBootData : !!shsRipData);
+        return `${type}-${selectedAttribute}-${shsAvailable}-${!!soilData}`;
+    }, [type, selectedAttribute, shsGermData, shsBootData, shsRipData, soilData]);
+
     if (!geoJsonData || !visible) return null;
 
     const style = (feature) => {
@@ -345,8 +378,8 @@ const VectorBoundaryLayer = ({ type, visible, weight = 1.5, color = '#9e9e9e', m
         // Comprehensive name detection for highlighting
         const featureName = (props.District || props.DISTRICT || props.DIST_NAME || props.dtname ||
             props.TEHSIL || props.SUB_DIST || props.sdtname ||
-            props.STATE || props.ST_NM || props.stname || "Region").trim().toUpperCase();
-
+            props.STATE || props.ST_NM || props.stname || "Region").trim();
+        
         const districtName = featureName.toLowerCase();
 
         // Data-to-Color matching
@@ -355,7 +388,7 @@ const VectorBoundaryLayer = ({ type, visible, weight = 1.5, color = '#9e9e9e', m
 
         // If filter is active and this region is NOT in the match list, grey it out
         if (isFilterActive) {
-            const isMatch = matchedSubdistricts.some(name => name.toUpperCase() === featureName);
+            const isMatch = matchedSubdistricts.some(name => name.trim().toUpperCase() === featureName.toUpperCase());
             if (!isMatch) {
                 return {
                     fillColor: '#d0d0d0',
@@ -372,34 +405,16 @@ const VectorBoundaryLayer = ({ type, visible, weight = 1.5, color = '#9e9e9e', m
 
             // SPECIAL LOGIC: If we are viewing suitability, check the live SHS data first
             if (selectedAttribute === 'shs_germination' || selectedAttribute === 'shs_booting' || selectedAttribute === 'shs_ripening') {
-                const stage = selectedAttribute === 'shs_germination' ? 'germination' : (selectedAttribute === 'shs_booting' ? 'booting' : 'ripening');
-                const t = SHS_COLOR_THRESHOLDS[stage];
-
-                let shsData;
-                if (stage === 'germination') shsData = shsGermData;
-                else if (stage === 'booting') shsData = shsBootData;
-                else shsData = shsRipData;
-
-                const normalizedSHS = {};
-                Object.entries(shsData || {}).forEach(([k, v]) => {
-                    normalizedSHS[k.trim().toLowerCase()] = v;
-                });
-
-                const district = normalizedSHS[districtName];
-
+                const district = normalizedData[districtName];
                 if (district) {
-                    const avg = district.avg_shs;
-                    fillColor = getExperimentalColor(selectedAttribute, avg);
+                    fillColor = getExperimentalColor(selectedAttribute, district.avg_shs);
                 } else {
                     fillColor = 'transparent';
                 }
-            } else if (type === 'district' && soilData && soilData[districtName]) {
-                // Check joined soil data for districts (Nitrogen, Phosphorous, etc.)
-                // RESTRICT TO SHS DISTRICTS (User's requested "8 districts")
+            } else if (type === 'district' && normalizedSoil[districtName]) {
                 const isSHSDistrict = shsDistricts && shsDistricts.some(d => d.toLowerCase() === districtName);
-
                 if (isSHSDistrict) {
-                    const joinedVal = soilData[districtName][selectedAttribute];
+                    const joinedVal = normalizedSoil[districtName][selectedAttribute];
                     if (joinedVal !== undefined) {
                         fillColor = getExperimentalColor(selectedAttribute, joinedVal);
                     } else {
@@ -506,7 +521,7 @@ const VectorBoundaryLayer = ({ type, visible, weight = 1.5, color = '#9e9e9e', m
         layer.bindTooltip("", { sticky: true, className: 'custom-map-tooltip' });
     };
 
-    return <GeoJSON key={`${type}-${selectedAttribute}`} data={geoJsonData} style={style} onEachFeature={onEachFeature} />;
+    return <GeoJSON key={dataKey} data={geoJsonData} style={style} onEachFeature={onEachFeature} />;
 };
 
 
@@ -890,6 +905,8 @@ const GerminationSuitability = () => {
                     <MapContainer
                         center={INDIA_CENTER}
                         zoom={DEFAULT_ZOOM}
+                        zoomSnap={0.1}
+                        zoomDelta={0.1}
                         style={{ height: '100%', width: '100%', background: '#fff' }} // White Background for Vector Map
                         zoomControl={false}
                     >
@@ -971,6 +988,110 @@ const GerminationSuitability = () => {
                             >Edit</button>
                         </div>
                     )}
+
+                    {/* Top Left Map Controls */}
+                    <div className="absolute top-4 left-4 z-[2000] bg-white rounded-lg border border-gray-200 p-2 shadow-sm flex items-center gap-4">
+                        {/* Compact Zoom */}
+                        <div className="flex flex-col gap-1 items-center">
+                            <div className="flex bg-gray-50 border border-gray-200 rounded p-0.5 shadow-inner">
+                                <button
+                                    onClick={() => mapInstance?.zoomIn()}
+                                    className="w-6 h-6 flex items-center justify-center bg-white border border-gray-200 text-gray-600 rounded-l hover:bg-gray-100 font-bold text-sm"
+                                    title="Zoom In"
+                                >
+                                    +
+                                </button>
+                                <button
+                                    onClick={() => mapInstance?.zoomOut()}
+                                    className="w-6 h-6 flex items-center justify-center bg-white border border-gray-200 text-gray-600 rounded-r hover:bg-gray-100 font-bold text-sm border-l-0"
+                                    title="Zoom Out"
+                                >
+                                    -
+                                </button>
+                            </div>
+                            <span className="text-[9px] font-bold text-gray-400 uppercase tracking-tighter">Zoom</span>
+                        </div>
+
+                        {/* Compact Pan & Recenter */}
+                        <div className="flex items-center gap-3">
+                            <div className="relative w-16 h-16 flex items-center justify-center scale-90">
+                                {/* Pan Up */}
+                                <button
+                                    onClick={() => mapInstance?.panBy([0, -100])}
+                                    className="absolute top-0 left-1/2 -translate-x-1/2 w-6 h-6 bg-white border border-gray-200 rounded shadow-sm hover:bg-gray-50 flex items-center justify-center text-gray-600"
+                                    title="Pan Up"
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+                                    </svg>
+                                </button>
+
+                                {/* Pan Left */}
+                                <button
+                                    onClick={() => mapInstance?.panBy([-100, 0])}
+                                    className="absolute left-0 top-1/2 -translate-y-1/2 w-6 h-6 bg-white border border-gray-200 rounded shadow-sm hover:bg-gray-50 flex items-center justify-center text-gray-600"
+                                    title="Pan Left"
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                                    </svg>
+                                </button>
+
+                                {/* Recenter */}
+                                <button
+                                    onClick={() => {
+                                        if (mapInstance) {
+                                            if (!filters.state) {
+                                                mapInstance.setView(INDIA_CENTER, DEFAULT_ZOOM);
+                                            } else {
+                                                const url = filters.district
+                                                    ? `${MAP_API_URL}/district?filter=${encodeURIComponent(filters.district)}`
+                                                    : `${MAP_API_URL}/state?filter=${encodeURIComponent(filters.state)}`;
+
+                                                fetch(url)
+                                                    .then(res => res.json())
+                                                    .then(data => {
+                                                        if (data.features && data.features.length > 0) {
+                                                            const layer = L.geoJSON(data);
+                                                            mapInstance.fitBounds(layer.getBounds(), { padding: [20, 20] });
+                                                        }
+                                                    });
+                                            }
+                                        }
+                                    }}
+                                    className="w-7 h-7 bg-green-600 text-white rounded-full shadow-md hover:bg-green-700 flex items-center justify-center z-10 transition-transform active:scale-95"
+                                    title="Recenter"
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                                        <path fillRule="evenodd" d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z" clipRule="evenodd" />
+                                    </svg>
+                                </button>
+
+                                {/* Pan Right */}
+                                <button
+                                    onClick={() => mapInstance?.panBy([100, 0])}
+                                    className="absolute right-0 top-1/2 -translate-y-1/2 w-6 h-6 bg-white border border-gray-200 rounded shadow-sm hover:bg-gray-50 flex items-center justify-center text-gray-600"
+                                    title="Pan Right"
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                                    </svg>
+                                </button>
+
+                                {/* Pan Down */}
+                                <button
+                                    onClick={() => mapInstance?.panBy([0, 100])}
+                                    className="absolute bottom-0 left-1/2 -translate-x-1/2 w-6 h-6 bg-white border border-gray-200 rounded shadow-sm hover:bg-gray-50 flex items-center justify-center text-gray-600"
+                                    title="Pan Down"
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                    </svg>
+                                </button>
+                            </div>
+                            <span className="text-[9px] font-bold text-gray-400 uppercase tracking-tighter">Pan & Center</span>
+                        </div>
+                    </div>
 
                     {/* Map Overlay: Legend moved outside MapContainer for visibility */}
                     <MapLegend attribute={selectedAttribute} />
@@ -1125,108 +1246,7 @@ const GerminationSuitability = () => {
                                     </div>
                                 </div>
 
-                                <div className="pt-2 border-t border-gray-100 flex items-center justify-between gap-4">
-                                    {/* Compact Zoom */}
-                                    <div className="flex flex-col gap-1 items-center">
-                                        <div className="flex bg-gray-50 border border-gray-200 rounded p-0.5 shadow-inner">
-                                            <button
-                                                onClick={() => mapInstance?.zoomIn()}
-                                                className="w-6 h-6 flex items-center justify-center bg-white border border-gray-200 text-gray-600 rounded-l hover:bg-gray-100 font-bold text-sm"
-                                                title="Zoom In"
-                                            >
-                                                +
-                                            </button>
-                                            <button
-                                                onClick={() => mapInstance?.zoomOut()}
-                                                className="w-6 h-6 flex items-center justify-center bg-white border border-gray-200 text-gray-600 rounded-r hover:bg-gray-100 font-bold text-sm border-l-0"
-                                                title="Zoom Out"
-                                            >
-                                                -
-                                            </button>
-                                        </div>
-                                        <span className="text-[9px] font-bold text-gray-400 uppercase tracking-tighter">Zoom</span>
-                                    </div>
 
-                                    {/* Compact Pan & Recenter */}
-                                    <div className="flex items-center gap-3">
-                                        <div className="relative w-16 h-16 flex items-center justify-center scale-90">
-                                            {/* Pan Up */}
-                                            <button
-                                                onClick={() => mapInstance?.panBy([0, -100])}
-                                                className="absolute top-0 left-1/2 -translate-x-1/2 w-6 h-6 bg-white border border-gray-200 rounded shadow-sm hover:bg-gray-50 flex items-center justify-center text-gray-600"
-                                                title="Pan Up"
-                                            >
-                                                <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
-                                                </svg>
-                                            </button>
-
-                                            {/* Pan Left */}
-                                            <button
-                                                onClick={() => mapInstance?.panBy([-100, 0])}
-                                                className="absolute left-0 top-1/2 -translate-y-1/2 w-6 h-6 bg-white border border-gray-200 rounded shadow-sm hover:bg-gray-50 flex items-center justify-center text-gray-600"
-                                                title="Pan Left"
-                                            >
-                                                <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                                                </svg>
-                                            </button>
-
-                                            {/* Recenter */}
-                                            <button
-                                                onClick={() => {
-                                                    if (mapInstance) {
-                                                        if (!filters.state) {
-                                                            mapInstance.setView(INDIA_CENTER, DEFAULT_ZOOM);
-                                                        } else {
-                                                            const url = filters.district
-                                                                ? `${MAP_API_URL}/district?filter=${encodeURIComponent(filters.district)}`
-                                                                : `${MAP_API_URL}/state?filter=${encodeURIComponent(filters.state)}`;
-
-                                                            fetch(url)
-                                                                .then(res => res.json())
-                                                                .then(data => {
-                                                                    if (data.features && data.features.length > 0) {
-                                                                        const layer = L.geoJSON(data);
-                                                                        mapInstance.fitBounds(layer.getBounds(), { padding: [20, 20] });
-                                                                    }
-                                                                });
-                                                        }
-                                                    }
-                                                }}
-                                                className="w-7 h-7 bg-green-600 text-white rounded-full shadow-md hover:bg-green-700 flex items-center justify-center z-10 transition-transform active:scale-95"
-                                                title="Recenter"
-                                            >
-                                                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                                                    <path fillRule="evenodd" d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z" clipRule="evenodd" />
-                                                </svg>
-                                            </button>
-
-                                            {/* Pan Right */}
-                                            <button
-                                                onClick={() => mapInstance?.panBy([100, 0])}
-                                                className="absolute right-0 top-1/2 -translate-y-1/2 w-6 h-6 bg-white border border-gray-200 rounded shadow-sm hover:bg-gray-50 flex items-center justify-center text-gray-600"
-                                                title="Pan Right"
-                                            >
-                                                <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                                                </svg>
-                                            </button>
-
-                                            {/* Pan Down */}
-                                            <button
-                                                onClick={() => mapInstance?.panBy([0, 100])}
-                                                className="absolute bottom-0 left-1/2 -translate-x-1/2 w-6 h-6 bg-white border border-gray-200 rounded shadow-sm hover:bg-gray-50 flex items-center justify-center text-gray-600"
-                                                title="Pan Down"
-                                            >
-                                                <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                                                </svg>
-                                            </button>
-                                        </div>
-                                        <span className="text-[9px] font-bold text-gray-400 uppercase tracking-tighter">Pan & Center</span>
-                                    </div>
-                                </div>
                             </div>
                         </div>
 

@@ -127,8 +127,6 @@ const VectorBoundaryLayer = ({ type, visible, weight = 1.5, color = '#9e9e9e', m
             .catch(err => console.error(`Error fetching ${type} overlay:`, err));
     }, [type, visible]);
 
-    if (!geoJsonData || !visible) return null;
-
     const style = (feature) => {
         const props = feature.properties;
         const isState = type === 'state';
@@ -178,41 +176,28 @@ const VectorBoundaryLayer = ({ type, visible, weight = 1.5, color = '#9e9e9e', m
 
     const onEachFeature = (feature, layer) => {
         const props = feature.properties;
-        const name = (props.District || props.DISTRICT || props.DIST_NAME || props.TEHSIL || props.SUB_DIST || props.STATE || props.ST_NM || 'Unknown').trim();
+        const name = (props.District || props.DISTRICT || props.DIST_NAME || props.dtname || 
+                     props.TEHSIL || props.SUB_DIST || props.sdtname || 
+                     props.STATE || props.ST_NM || props.stname || "Region").trim();
         const val = props[selectedAttribute] ?? props['oc'];
-        const category = props.germination_category;
 
-        // State layer should be non-interactive/no tooltips to avoid blocking districts
-        if (type === 'state') return;
-
-        if (val !== undefined || category) {
-            const attr = ATTRIBUTES.find(a => a.key === selectedAttribute);
-            const catColor = category === 'Good' ? '#1a9850' : category === 'Fair' ? '#f4b400' : '#d73027';
-
-            let html = `<div class="p-2">
-                <div class="text-[10px] font-bold text-gray-400 uppercase">${type}</div>
-                <div class="text-sm font-bold text-gray-800">${name}</div>`;
-
-            if (val !== undefined) {
-                html += `<div class="mt-1 flex items-center gap-2">
-                    <span class="text-xs text-gray-600">${attr?.label || selectedAttribute}:</span>
-                    <span class="text-sm font-bold text-green-700">${val.toFixed(2)}${attr?.unit || ''}</span>
-                </div>`;
-            }
-
-            if (category) {
-                html += `<div class="mt-1 flex items-center gap-2">
-                    <span class="text-xs text-gray-600">Status:</span>
-                    <span class="text-[10px] font-bold px-2 py-0.5 rounded-full text-white" style="background: ${catColor}">${category}</span>
-                </div>`;
-            }
-            html += `</div>`;
-
-            layer.bindTooltip(html, { sticky: true, className: 'custom-map-tooltip' });
+        if (val !== undefined) {
+            layer.bindPopup(`
+                <div class="font-sans">
+                    <h3 class="font-bold text-sm border-b pb-1 mb-1">${name}</h3>
+                    <div class="text-sm">
+                        <span class="text-gray-600 capitalize">${selectedAttribute}:</span> 
+                        <span class="font-bold text-green-700">${typeof val === 'number' ? val.toFixed(2) : val}</span>
+                    </div>
+                </div>
+            `);
         }
+        layer.bindTooltip("", { sticky: true, className: 'custom-map-tooltip' });
     };
 
-    return <GeoJSON key={`${type}-${selectedAttribute}`} data={geoJsonData} style={style} onEachFeature={onEachFeature} />;
+    if (!geoJsonData || !visible) return null;
+
+    return <GeoJSON key={`${type}-${selectedAttribute}-${!!geoJsonData}`} data={geoJsonData} style={style} onEachFeature={onEachFeature} />;
 };
 
 
@@ -497,6 +482,8 @@ const ExperimentalAnalysis = () => {
                     <MapContainer
                         center={INDIA_CENTER}
                         zoom={DEFAULT_ZOOM}
+                        zoomSnap={0.1}
+                        zoomDelta={0.1}
                         style={{ height: '100%', width: '100%', background: '#fff' }} // White Background for Vector Map
                         zoomControl={false}
                     >
