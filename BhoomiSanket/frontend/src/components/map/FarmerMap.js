@@ -68,9 +68,9 @@ const GeoJsonController = ({ data, onRegionSelect, analysisResult, activeRegion,
                     const { lat, lng } = e.latlng;
                     const isResultRegion = analysisResult && activeRegion && regionName.toUpperCase() === activeRegion.toUpperCase();
                     const score = isResultRegion ? (
-                        activeStage === 'germination' ? analysisResult.germ_shs : 
-                        activeStage === 'booting' ? analysisResult.boot_shs : 
-                        analysisResult.rip_shs
+                        activeStage === 'germination' ? analysisResult.germ_shs :
+                            activeStage === 'booting' ? analysisResult.boot_shs :
+                                analysisResult.rip_shs
                     ) : null;
 
                     let tooltipHtml = `
@@ -123,9 +123,9 @@ const GeoJsonController = ({ data, onRegionSelect, analysisResult, activeRegion,
 
                 // Check if this is the active region we just analyzed
                 if (analysisResult && activeRegion && regionName.toUpperCase() === activeRegion.toUpperCase()) {
-                    const score = activeStage === 'germination' ? analysisResult.germ_shs : 
-                                  activeStage === 'booting' ? analysisResult.boot_shs : 
-                                  analysisResult.rip_shs;
+                    const score = activeStage === 'germination' ? analysisResult.germ_shs :
+                        activeStage === 'booting' ? analysisResult.boot_shs :
+                            analysisResult.rip_shs;
                     return {
                         ...STYLES.default,
                         fillColor: getShsColor(activeStage, score),
@@ -143,7 +143,7 @@ const GeoJsonController = ({ data, onRegionSelect, analysisResult, activeRegion,
         // Auto-zoom to bounds ONLY if it's the first load or data changed WITHOUT a map click
         const bounds = geoJsonLayerRef.current.getBounds();
         const shouldFitBounds = bounds.isValid() && !data.isFromClick;
-        
+
         if (shouldFitBounds) {
             map.fitBounds(bounds, {
                 padding: [20, 20],
@@ -165,18 +165,10 @@ const GeoJsonController = ({ data, onRegionSelect, analysisResult, activeRegion,
 
 const LocationMarker = ({ position, setPosition }) => {
     const markerRef = useRef(null);
-    
+
     const map = useMapEvents({
         click(e) {
             setPosition(e.latlng);
-            // Use setTimeout to ensure the zoom happens after the re-render
-            // and is not cancelled by other map activities
-            setTimeout(() => {
-                map.setView(e.latlng, 15, {
-                    animate: true,
-                    duration: 1
-                });
-            }, 100);
         },
     });
 
@@ -189,9 +181,9 @@ const LocationMarker = ({ position, setPosition }) => {
     if (!position) return null;
 
     return (
-        <CircleMarker 
+        <CircleMarker
             ref={markerRef}
-            center={position} 
+            center={position}
             radius={5}
             pathOptions={{
                 fillColor: '#000000',
@@ -282,8 +274,8 @@ const FarmerMap = ({ boundaryGeoJSON, onLocationSelect, onRegionSelect, analysis
                                 { label: 'Very Poor', range: activeStage === 'booting' ? '(<83.8%)' : activeStage === 'ripening' ? '(<76.5%)' : '(<74%)', color: '#d73027' }
                             ].map((item, idx) => (
                                 <div key={idx} className="flex items-center gap-3">
-                                    <div 
-                                        className="w-4 h-4 rounded-sm shadow-sm border border-black/5" 
+                                    <div
+                                        className="w-4 h-4 rounded-sm shadow-sm border border-black/5"
                                         style={{ backgroundColor: item.color }}
                                     ></div>
                                     <div className="flex items-baseline gap-1.5">
@@ -297,9 +289,12 @@ const FarmerMap = ({ boundaryGeoJSON, onLocationSelect, onRegionSelect, analysis
                 )}
 
                 {/* Overlay instruction */}
-                <div className="absolute top-4 right-4 bg-white/90 p-2 rounded shadow-md z-[1000] text-xs max-w-[200px]">
-                    <p className="font-semibold text-gray-700">Interactive Map</p>
-                    <p className="text-gray-600">Click a region to select. Click empty space to mark field.</p>
+                <div className="absolute top-4 right-4 bg-white/95 p-3 rounded-xl shadow-lg z-[1000] text-[11px] max-w-[220px] border border-green-100">
+                    <p className="font-bold text-slate-800 mb-1 flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-green-500"></span>
+                        Interactive Map
+                    </p>
+                    <p className="text-slate-500 leading-relaxed font-medium">Click a state or district boundary to select and zoom. Click a point to mark your field coordinates.</p>
                 </div>
             </MapContainer>
         </div>
@@ -307,3 +302,4 @@ const FarmerMap = ({ boundaryGeoJSON, onLocationSelect, onRegionSelect, analysis
 };
 
 export default FarmerMap;
+

@@ -10,10 +10,9 @@ const Header = () => {
 
     const menuItems = [
         { name: 'Home', href: '/' },
-        { name: 'About', href: '#' },
-        { name: 'Services', href: '#' },
+        { name: 'About', href: '/about' },
         { name: 'Dashboard', href: '/dashboard' },
-        { name: 'Contact', href: '#' },
+        { name: 'Contact', href: '/contact' },
     ];
 
     return (
@@ -34,13 +33,13 @@ const Header = () => {
                     {/* Desktop Menu */}
                     <nav className="hidden md:flex space-x-8 items-center">
                         {menuItems.map((item) => (
-                            <a
+                            <Link
                                 key={item.name}
-                                href={item.href}
+                                to={item.href}
                                 className="text-sm font-medium hover:text-brand-accent transition-colors duration-200"
                             >
                                 {item.name}
-                            </a>
+                            </Link>
                         ))}
                     </nav>
 
@@ -82,13 +81,13 @@ const Header = () => {
                         <ul className="flex flex-col space-y-4 mt-4">
                             {menuItems.map((item) => (
                                 <li key={item.name}>
-                                    <a
-                                        href={item.href}
+                                    <Link
+                                        to={item.href}
                                         className="block text-base font-medium hover:text-brand-accent transition-colors"
                                         onClick={() => setIsMenuOpen(false)}
                                     >
                                         {item.name}
-                                    </a>
+                                    </Link>
                                 </li>
                             ))}
                         </ul>

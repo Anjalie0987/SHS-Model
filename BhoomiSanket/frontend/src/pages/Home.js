@@ -36,12 +36,12 @@ const Home = () => {
                 <div className="relative z-20 w-full px-6 md:px-[8%]">
                     <div className="max-w-[600px] text-left">
                         <h2 className="text-5xl md:text-6xl font-serif font-bold text-white mb-6 leading-tight">
-                            Analyze Your Soil & <br />
+                            Analyze Your Soil Health Score & <br />
                             Grow Smarter Crops
                         </h2>
 
                         <p className="text-lg md:text-xl text-white/80 mb-10 font-sans leading-relaxed">
-                            Upload your soil data and get AI-powered insights, nutrient recommendations, and crop suitability analysis for smarter farming decisions.
+                            Analyze your soil data to generate crop-specific, AI-powered insights and crop suitability assessments for smarter farming decisions and data-driven recommendations.
                         </p>
 
                         <div className="flex">

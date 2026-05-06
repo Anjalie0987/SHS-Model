@@ -1,6 +1,7 @@
 import React from 'react';
 import { Routes, Route } from 'react-router-dom';
 import Home from './pages/Home';
+import About from './pages/About';
 import LoginSelector from './pages/auth/LoginSelector';
 import UserLogin from './pages/auth/UserLogin';
 import UserSignup from './pages/auth/UserSignup';
@@ -14,15 +15,18 @@ import Dashboard from './pages/dashboard/Dashboard';
 import GerminationSuitability from './pages/analysis/GerminationSuitability';
 import ExperimentalAnalysis from './pages/analysis/ExperimentalAnalysis';
 import MapLanding from './pages/MapLanding';
+import Contact from './pages/Contact';
 
 function App() {
   return (
     <div className="App">
       <Routes>
         <Route path="/" element={<Home />} />
+        <Route path="/about" element={<About />} />
         <Route path="/login-selection" element={<LoginSelector />} />
         <Route path="/login" element={<FarmerAuth />} />
         <Route path="/map-landing" element={<MapLanding />} />
+        <Route path="/contact" element={<Contact />} />
 
         <Route path="/user/login" element={<FarmerAuth />} />
         <Route path="/signup" element={<FarmerAuth />} />

@@ -5,7 +5,7 @@ import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import 'leaflet.heat';
 import { INDIA_CENTER, DEFAULT_ZOOM } from '../../data/geoBounds';
-import QueryBuilder from '../../components/QueryBuilder';
+
 import { getShsColor } from '../../utils/colorUtils';
 
 // === CONFIGURATION ===
@@ -321,7 +321,7 @@ const SuitabilityHeatLayer = ({ points, stage, enabled }) => {
 };
 
 // Component to handle Vector Boundaries
-const VectorBoundaryLayer = ({ type, visible, weight = 1.5, color = '#9e9e9e', matchedSubdistricts, selectedAttribute, shsGermData, shsBootData, shsRipData, soilData, shsDistricts }) => {
+const VectorBoundaryLayer = ({ type, visible, weight = 1.5, color = '#9e9e9e', selectedAttribute, shsGermData, shsBootData, shsRipData, soilData, shsDistricts, stateFilter }) => {
     const [geoJsonData, setGeoJsonData] = useState(null);
 
     useEffect(() => {
@@ -341,7 +341,7 @@ const VectorBoundaryLayer = ({ type, visible, weight = 1.5, color = '#9e9e9e', m
     const normalizedData = useMemo(() => {
         const stage = selectedAttribute === 'shs_germination' ? 'germination' : (selectedAttribute === 'shs_booting' ? 'booting' : 'ripening');
         const shsData = (stage === 'germination') ? shsGermData : (stage === 'booting' ? shsBootData : shsRipData);
-        
+
         const norm = {};
         if (shsData) {
             Object.entries(shsData).forEach(([k, v]) => {
@@ -365,11 +365,39 @@ const VectorBoundaryLayer = ({ type, visible, weight = 1.5, color = '#9e9e9e', m
     // This forces a full refresh of the GeoJSON layer (and its listeners) when data loads.
     const dataKey = useMemo(() => {
         const stage = selectedAttribute === 'shs_germination' ? 'germination' : (selectedAttribute === 'shs_booting' ? 'booting' : 'ripening');
-        const shsAvailable = (stage === 'germination') ? !!shsGermData : (stage === 'booting' ? !!shsBootData : !!shsRipData);
-        return `${type}-${selectedAttribute}-${shsAvailable}-${!!soilData}`;
+        const shsData = (stage === 'germination') ? shsGermData : (stage === 'booting' ? shsBootData : shsRipData);
+
+        // Count entries to detect when data actually arrives
+        const shsCount = shsData ? Object.keys(shsData).length : 0;
+        const soilCount = soilData ? Object.keys(soilData).length : 0;
+
+        return `${type}-${selectedAttribute}-${shsCount}-${soilCount}`;
     }, [type, selectedAttribute, shsGermData, shsBootData, shsRipData, soilData]);
 
-    if (!geoJsonData || !visible) return null;
+    const filteredData = useMemo(() => {
+        if (!geoJsonData || !geoJsonData.features) return null;
+        if (!stateFilter || stateFilter === 'All States') return geoJsonData;
+
+        const filterU = stateFilter.trim().toUpperCase();
+        const filteredFeatures = geoJsonData.features.filter(f => {
+            const p = f.properties;
+            // Check state name across multiple possible GeoJSON property keys
+            const sName = (p.STATE || p.ST_NM || p.stname || p.State_Name || p.st_nm || "").trim().toUpperCase();
+
+            // If it's a state layer, the name of the feature itself must match the state filter
+            if (type === 'state') {
+                const featureName = (p.STATE || p.ST_NM || p.stname || p.ST_NAME || "").trim().toUpperCase();
+                return featureName === filterU;
+            }
+
+            // If it's a district or subdistrict layer, the parent state property must match the state filter
+            return sName === filterU;
+        });
+
+        return { ...geoJsonData, features: filteredFeatures };
+    }, [geoJsonData, stateFilter, type]);
+
+    if (!filteredData || !visible || filteredData.features.length === 0) return null;
 
     const style = (feature) => {
         const props = feature.properties;
@@ -379,28 +407,14 @@ const VectorBoundaryLayer = ({ type, visible, weight = 1.5, color = '#9e9e9e', m
         const featureName = (props.District || props.DISTRICT || props.DIST_NAME || props.dtname ||
             props.TEHSIL || props.SUB_DIST || props.sdtname ||
             props.STATE || props.ST_NM || props.stname || "Region").trim();
-        
+
         const districtName = featureName.toLowerCase();
 
         // Data-to-Color matching
-        const val = props[selectedAttribute] ?? props['oc'];
-        const isFilterActive = matchedSubdistricts && matchedSubdistricts.length > 0;
+        const val = props[selectedAttribute];
 
-        // If filter is active and this region is NOT in the match list, grey it out
-        if (isFilterActive) {
-            const isMatch = matchedSubdistricts.some(name => name.trim().toUpperCase() === featureName.toUpperCase());
-            if (!isMatch) {
-                return {
-                    fillColor: '#d0d0d0',
-                    fillOpacity: 0.2,
-                    color: '#aaa',
-                    weight: 0.5,
-                    opacity: 0.5
-                };
-            }
-        }
-
-        if (selectedAttribute && (val !== undefined || selectedAttribute?.startsWith('shs_') || (soilData && type === 'district')) && (type === 'district' || type === 'state')) {
+        const isPointOrHeat = selectedAttribute?.endsWith('_points') || selectedAttribute?.endsWith('_heat');
+        if (selectedAttribute && !isPointOrHeat && (val !== undefined || selectedAttribute?.startsWith('shs_') || (soilData && type === 'district')) && (type === 'district' || type === 'state')) {
             let fillColor = getExperimentalColor(selectedAttribute, val);
 
             // SPECIAL LOGIC: If we are viewing suitability, check the live SHS data first
@@ -494,7 +508,7 @@ const VectorBoundaryLayer = ({ type, visible, weight = 1.5, color = '#9e9e9e', m
                 } else if (type === 'district' && isSHSDistrict && soilData && soilData[districtName]) {
                     displayVal = soilData[districtName][selectedAttribute];
                 } else if (type === 'state') {
-                    displayVal = props[selectedAttribute] ?? props['oc'];
+                    displayVal = props[selectedAttribute];
                 }
 
                 let html = `<div class="p-2">
@@ -521,7 +535,7 @@ const VectorBoundaryLayer = ({ type, visible, weight = 1.5, color = '#9e9e9e', m
         layer.bindTooltip("", { sticky: true, className: 'custom-map-tooltip' });
     };
 
-    return <GeoJSON key={dataKey} data={geoJsonData} style={style} onEachFeature={onEachFeature} />;
+    return <GeoJSON key={dataKey + stateFilter} data={filteredData} style={style} onEachFeature={onEachFeature} />;
 };
 
 
@@ -612,18 +626,14 @@ const GerminationSuitability = () => {
     const [mapInstance, setMapInstance] = useState(null);
     const navigate = useNavigate();
 
-    // Query Builder State
-    const [queryBuilderOpen, setQueryBuilderOpen] = useState(false);
-    const [matchedSubdistricts, setMatchedSubdistricts] = useState(null);
-
     // View Toggles
     const [showStates, setShowStates] = useState(true);
     const [showDistricts, setShowDistricts] = useState(false);
     const [showSubdistricts, setShowSubdistricts] = useState(false);
     const [showPoints, setShowPoints] = useState(false);
-    const [germShsData, setGermShsData] = useState({});
-    const [bootShsData, setBootShsData] = useState({});
-    const [ripShsData, setRipShsData] = useState({});
+    const [germShsData, setGermShsData] = useState(null);
+    const [bootShsData, setBootShsData] = useState(null);
+    const [ripShsData, setRipShsData] = useState(null);
 
     // NEW: Lat/Lon suitability overlays
     const [latlonPoints, setLatlonPoints] = useState([]);
@@ -639,15 +649,11 @@ const GerminationSuitability = () => {
             .catch(err => console.error("Error fetching master SHS districts:", err));
     }, []);
 
-    // If any SHS data exists but no state is selected, default to Maharashtra (since SHS backend only processes Maharashtra currently)
+    // Auto-focus logic: If an attribute is selected but no state is filtered, default to Maharashtra
+    // (since SHS models and detailed data are currently centered there).
+    // Also handle automatic layer visibility toggling.
     useEffect(() => {
-        const hasGermData = germShsData && Object.keys(germShsData).length > 0;
-        const hasBootData = bootShsData && Object.keys(bootShsData).length > 0;
-        const hasRipData = ripShsData && Object.keys(ripShsData).length > 0;
-
-        if (((selectedAttribute === 'shs_germination' && hasGermData) ||
-            (selectedAttribute === 'shs_booting' && hasBootData) ||
-            (selectedAttribute === 'shs_ripening' && hasRipData)) && !filters.state) {
+        if (selectedAttribute && !filters.state) {
             setFilters((prev) => ({ ...prev, state: 'Maharashtra' }));
         }
 
@@ -659,7 +665,7 @@ const GerminationSuitability = () => {
         } else if (!selectedAttribute && !showDistricts && !showSubdistricts && !showPoints) {
             setShowStates(true);
         }
-    }, [selectedAttribute, filters.state, showDistricts, showSubdistricts, showPoints]);
+    }, [selectedAttribute, filters.state]);
 
     // Flatten locations for searching
     const allSearchable = useMemo(() => {
@@ -847,9 +853,9 @@ const GerminationSuitability = () => {
             {/* Header */}
             <header className="h-16 bg-white shadow-sm border-b border-gray-200 z-20 px-6 flex justify-between items-center">
                 <SearchCloser onClickOutside={() => setShowSuggestions(false)} />
-                <h1 className="text-xl font-bold text-gray-800">Germination Suitability</h1>
+                <h1 className="text-xl font-bold text-gray-800">Soil Health Analysis (Stage Specific)</h1>
 
-                <div className="flex gap-4 items-center flex-grow justify-center">
+                <div className="flex gap-4 items-center flex-grow justify-center"   >
                     {/* Search Box */}
                     <div className="relative">
                         <input
@@ -921,12 +927,12 @@ const GerminationSuitability = () => {
                             visible={showStates}
                             weight={2}
                             color="#666"
-                            matchedSubdistricts={matchedSubdistricts}
                             selectedAttribute={selectedAttribute}
                             attributeStats={attributeStats}
                             shsGermData={germShsData}
                             shsBootData={bootShsData}
                             shsRipData={ripShsData}
+                            stateFilter={filters.state}
                         />
 
                         {/* Optional matched subdistrict highlight (if any) */}
@@ -935,12 +941,12 @@ const GerminationSuitability = () => {
                             visible={showSubdistricts}
                             weight={1}
                             color="#ccc"
-                            matchedSubdistricts={matchedSubdistricts}
                             selectedAttribute={selectedAttribute}
                             attributeStats={attributeStats}
                             shsGermData={germShsData}
                             shsBootData={bootShsData}
                             shsRipData={ripShsData}
+                            stateFilter={filters.state}
                         />
 
                         {/* Districts Layer (Now handles SHS and Soil Data logic internally) */}
@@ -949,7 +955,6 @@ const GerminationSuitability = () => {
                             visible={showDistricts}
                             weight={1.5}
                             color="#444"
-                            matchedSubdistricts={matchedSubdistricts}
                             selectedAttribute={selectedAttribute}
                             attributeStats={attributeStats}
                             shsGermData={germShsData}
@@ -957,6 +962,7 @@ const GerminationSuitability = () => {
                             shsRipData={ripShsData}
                             soilData={aggregatedDistrictData}
                             shsDistricts={shsDistricts}
+                            stateFilter={filters.state}
                         />
 
                         {/* SHS Choropleth Layers are now integrated into VectorBoundaryLayer */}
@@ -969,25 +975,6 @@ const GerminationSuitability = () => {
                         {selectedAttribute === 'boot_points' && <SuitabilityPointsLayer points={latlonPoints} stage="booting" />}
                         {selectedAttribute === 'rip_points' && <SuitabilityPointsLayer points={latlonPoints} stage="ripening" />}
                     </MapContainer>
-
-                    {/* Query Builder Toggle Button */}
-                    {!matchedSubdistricts ? (
-                        <button
-                            className="qb-toggle-btn"
-                            onClick={() => setQueryBuilderOpen(true)}
-                        >
-                            🔍 Query Builder
-                        </button>
-                    ) : (
-                        <div className="qb-active-badge">
-                            🔍 Filter Active ({matchedSubdistricts.length} regions)
-                            <button className="qb-clear-x" onClick={() => setMatchedSubdistricts(null)}>✕</button>
-                            <button
-                                style={{ background: 'none', border: 'none', color: 'white', cursor: 'pointer', fontSize: '11px', textDecoration: 'underline' }}
-                                onClick={() => setQueryBuilderOpen(true)}
-                            >Edit</button>
-                        </div>
-                    )}
 
                     {/* Top Left Map Controls */}
                     <div className="absolute top-4 left-4 z-[2000] bg-white rounded-lg border border-gray-200 p-2 shadow-sm flex items-center gap-4">
@@ -1121,7 +1108,7 @@ const GerminationSuitability = () => {
                                         setShowSubdistricts(false);
                                         setShowPoints(false);
                                     }}
-                                    className="text-[10px] text-green-600 hover:underline normal-case font-medium"
+                                    className="text-sm text-green-600 hover:text-green-700 hover:underline normal-case font-semibold"
                                 >
                                     Reset View
                                 </button>
@@ -1183,6 +1170,8 @@ const GerminationSuitability = () => {
                                     </label>
                                     <div className="pt-2 mt-2 border-t border-gray-100">
                                         <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">Lat/Lon Suitability</div>
+
+                                        {/* Points Section */}
                                         <label className="flex items-center gap-2 cursor-pointer group text-[13px] text-gray-700">
                                             <input
                                                 type="radio"
@@ -1207,6 +1196,19 @@ const GerminationSuitability = () => {
                                             <input
                                                 type="radio"
                                                 name="suitability-radio"
+                                                checked={selectedAttribute === 'rip_points'}
+                                                onChange={() => setSelectedAttribute('rip_points')}
+                                                className="w-3.5 h-3.5 text-orange-600 border-gray-300 rounded focus:ring-orange-500 cursor-pointer"
+                                            />
+                                            <span className="group-hover:text-orange-700 transition-colors">Ripening Points</span>
+                                        </label>
+
+                                        {/* Heatmap Section */}
+                                        <div className="mt-2"></div>
+                                        <label className="flex items-center gap-2 cursor-pointer group text-[13px] text-gray-700">
+                                            <input
+                                                type="radio"
+                                                name="suitability-radio"
                                                 checked={selectedAttribute === 'germ_heat'}
                                                 onChange={() => setSelectedAttribute('germ_heat')}
                                                 className="w-3.5 h-3.5 text-green-600 border-gray-300 rounded focus:ring-green-500 cursor-pointer"
@@ -1222,16 +1224,6 @@ const GerminationSuitability = () => {
                                                 className="w-3.5 h-3.5 text-purple-600 border-gray-300 rounded focus:ring-purple-500 cursor-pointer"
                                             />
                                             <span className="group-hover:text-purple-700 transition-colors">Booting Heatmap</span>
-                                        </label>
-                                        <label className="flex items-center gap-2 cursor-pointer group text-[13px] text-gray-700">
-                                            <input
-                                                type="radio"
-                                                name="suitability-radio"
-                                                checked={selectedAttribute === 'rip_points'}
-                                                onChange={() => setSelectedAttribute('rip_points')}
-                                                className="w-3.5 h-3.5 text-orange-600 border-gray-300 rounded focus:ring-orange-500 cursor-pointer"
-                                            />
-                                            <span className="group-hover:text-orange-700 transition-colors">Ripening Points</span>
                                         </label>
                                         <label className="flex items-center gap-2 cursor-pointer group text-[13px] text-gray-700">
                                             <input
@@ -1305,15 +1297,6 @@ const GerminationSuitability = () => {
                     </div>
                 </div>
             </div>
-
-
-            {/* Query Builder Dialog */}
-            <QueryBuilder
-                isOpen={queryBuilderOpen}
-                onClose={() => setQueryBuilderOpen(false)}
-                onApplyFilter={(subdistricts) => setMatchedSubdistricts(subdistricts)}
-                onClearFilter={() => setMatchedSubdistricts(null)}
-            />
         </div>
     );
 };
