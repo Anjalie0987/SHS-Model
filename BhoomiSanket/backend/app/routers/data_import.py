@@ -1,23 +1,11 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, BackgroundTasks
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-
-from app.database import SessionLocal, engine, Base
+from app.database import SessionLocal, engine
 from app import models
+from app.services.shs_service import SHSService
 import pandas as pd
 import io
-import math
-
-# Create tables if not exist (Simple migration)
-# DROP table to force schema update since we are not using alembic in this dev env
-try:
-    with engine.connect() as connection:
-        connection.execute(text("DROP TABLE IF EXISTS soil_samples CASCADE"))
-        connection.commit()
-except Exception as e:
-    print(f"Error dropping table: {e}")
-
-Base.metadata.create_all(bind=engine)
 
 router = APIRouter(
     prefix="/import",
@@ -31,20 +19,10 @@ def get_db():
     finally:
         db.close()
 
-# Sub-districts list for auto-assignment (Mock for now, ideally fetch from shapefile)
-SUBDISTRICTS = [
-    "Ajnala", "Amritsar- I", "Amritsar- II", "Baba Bakala", 
-    "Batala", "Dera Baba Nanak", "Dhar Kalan", "Gurdaspur", 
-    "Pathankot", "Jalandhar - I", "Jalandhar - II", "Nakodar", 
-    "Phillaur", "Shahkot", "Jagraon", "Khanna", "Ludhiana (East)", 
-    "Ludhiana (West)", "Payal", "Raikot", "Samrala"
-]
-
 @router.post("/soil-data")
-async def import_soil_data(file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def import_soil_data(background_tasks: BackgroundTasks, file: UploadFile = File(...), db: Session = Depends(get_db)):
     """
-    Import CSV Data into Database.
-    If CSV has no location, it assigns rows to subdistricts round-robin.
+    Import CSV Data into Normalized Database.
     """
     if not file.filename.endswith('.csv'):
         raise HTTPException(status_code=400, detail="Invalid file type. Please upload a CSV.")
@@ -56,111 +34,99 @@ async def import_soil_data(file: UploadFile = File(...), db: Session = Depends(g
         # Normalize headers
         df.columns = [c.strip().lower() for c in df.columns]
         
-        # Map common aliases including Location
-        # Map common aliases including Location
         rename_map = {
-            'n': 'nitrogen', 'p': 'phosphorus', 'k': 'potassium',
-            'ph': 'soil_ph', 'oc': 'soc', 'zinc': 'zn', 'sulphur': 's',
-            'iron': 'fe', 'manganese': 'mn', 'copper': 'cu', 'boron': 'b',
-            'd': 'district', 'dist': 'district', 'district_name': 'district',
-            'sdt': 'subdistrict', 'tehsil': 'subdistrict', 'block': 'subdistrict',
-            'sub_district': 'subdistrict',
-            # New columns from Crop_recommendation.csv
-            'temperature': 'temperature',
-            'humidity': 'humidity',
-            'soil_ph': 'ph', # CSV has soil_ph, model has ph
-            'soc': 'oc', # CSV has soc, model has oc
-            'soil_moisture': 'moisture',
-            'water_holding': 'water_holding_capacity',
-            'cec': 'cec',
-            'sand': 'sand',
-            'silt': 'silt',
-            'clay': 'clay'
+            'n': 'n', 'p': 'p', 'k': 'k',
+            'ph': 'ph', 'oc': 'oc', 'nitrogen': 'n', 'phosphorus': 'p', 'potassium': 'k',
+            'soil_ph': 'ph', 'soc': 'oc', 'soil_moisture': 'moisture', 'moisture': 'moisture',
+            'temperature': 'temp', 'temp': 'temp', 'ndvi': 'ndvi'
         }
         df.rename(columns=rename_map, inplace=True)
 
-        required_cols = ['nitrogen', 'phosphorus', 'potassium']
-        missing = [col for col in required_cols if col not in df.columns]
-        if missing:
-             # Try fallback to less strict requirements if possible, else fail
-             raise HTTPException(status_code=400, detail=f"Missing columns: {missing}. Found: {list(df.columns)}")
+        # Helper to safely parse float
+        def safe_float(val, default=0.0):
+            try:
+                if pd.isna(val) or val is None: return default
+                return float(val)
+            except:
+                return default
 
-        # Clear existing data to avoid duplicates confusing the map
-        db.query(models.SoilSample).delete()
-        
-        count = 0
-        total_subdistricts = len(SUBDISTRICTS)
-        
         imported_count = 0
         for index, row in df.iterrows():
-            # Handle NaN values safety
-            row = row.where(pd.notnull(row), None)
+            # 1. Location Hierarchy (Using defaults if missing)
+            state_name = str(row.get('state', 'Punjab')).strip().title()
+            district_name = str(row.get('district', 'Amritsar')).strip().upper()
+            village_name = str(row.get('village', 'Default Village')).strip().title()
+
+            state = db.query(models.State).filter(models.State.name == state_name).first()
+            if not state:
+                state = models.State(name=state_name)
+                db.add(state)
+                db.commit(); db.refresh(state)
+
+            district = db.query(models.District).filter(models.District.name == district_name, models.District.state_id == state.state_id).first()
+            if not district:
+                district = models.District(name=district_name, state_id=state.state_id)
+                db.add(district); db.commit(); db.refresh(district)
+
+            village = db.query(models.Village).filter(models.Village.name == village_name, models.Village.district_id == district.district_id).first()
+            if not village:
+                village = models.Village(name=village_name, district_id=district.district_id)
+                db.add(village); db.commit(); db.refresh(village)
+
+            # 2. Farmer & Farm
+            farmer_name = str(row.get('farmer', 'CSV Farmer')).strip()
+            mobile = str(row.get('mobile', f"99{index:08d}"))
             
-            # Skip empty rows (if N, P, K are all missing)
-            if row.get('nitrogen') is None and row.get('phosphorus') is None:
-                continue
+            farmer = db.query(models.Farmer).filter(models.Farmer.mobile == mobile).first()
+            if not farmer:
+                farmer = models.Farmer(name=farmer_name, mobile=mobile)
+                db.add(farmer); db.commit(); db.refresh(farmer)
 
-            # 1. District
-            # Priority: CSV 'district' -> Default "AMRITSAR"
-            raw_dist = row.get('district')
-            district = str(raw_dist).strip().upper() if raw_dist else "AMRITSAR"
-
-            # 2. Sub-District
-            # Priority: CSV 'subdistrict' -> Local Round Robin
-            raw_sub = row.get('subdistrict')
-            if raw_sub:
-                subdistrict = str(raw_sub).strip()
-            else:
-                # Fallback to round-robin assignment for demo
-                subdistrict = SUBDISTRICTS[count % total_subdistricts]
-                count += 1
-            
-            # Helper to safely parse float
-            def safe_float(val):
-                try:
-                    return float(val) if val is not None else None
-                except:
-                    return None
-
-            sample = models.SoilSample(
-                district_name=district,
-                subdistrict_name=subdistrict,
-                nitrogen=safe_float(row.get('nitrogen')),
-                phosphorus=safe_float(row.get('phosphorus')),
-                potassium=safe_float(row.get('potassium')),
-                ph=safe_float(row.get('ph')),
-                oc=safe_float(row.get('oc')), 
-                moisture=safe_float(row.get('moisture')),
-                rainfall=safe_float(row.get('rainfall')),
-                temperature=safe_float(row.get('temperature')),
-                humidity=safe_float(row.get('humidity')),
-                cec=safe_float(row.get('cec')),
-                sand=safe_float(row.get('sand')),
-                silt=safe_float(row.get('silt')),
-                clay=safe_float(row.get('clay')),
-                water_holding_capacity=safe_float(row.get('water_holding_capacity')),
-                
-                # Map other fields if present in CSV, else None
-                zinc=safe_float(row.get('zn') or row.get('zinc')),
-                sulphur=safe_float(row.get('s') or row.get('sulphur')),
-                boron=safe_float(row.get('b') or row.get('boron')),
-                iron=safe_float(row.get('fe') or row.get('iron')),
-                manganese=safe_float(row.get('mn') or row.get('manganese')),
-                copper=safe_float(row.get('cu') or row.get('copper'))
+            farm = models.Farm(
+                farmer_id=farmer.farmer_id,
+                village_id=village.village_id,
+                farm_name=f"Farm_{index}",
+                area_ha=safe_float(row.get('area', 1.0))
             )
-            db.add(sample)
-            imported_count += 1
-            
-        db.commit()
-        
-        unique_districts = sorted(df['district'].dropna().unique().tolist()) if 'district' in df.columns else ["AMRITSAR"]
-        unique_districts = [str(d).strip().upper() for d in unique_districts]
+            db.add(farm); db.commit(); db.refresh(farm)
 
-        return {
-            "message": f"Successfully imported {imported_count} records into {len(unique_districts)} districts.", 
-            "districts": list(set(unique_districts))
-        }
+            # 3. Soil Sample
+            sample = models.SoilSample(
+                farm_id=farm.farm_id,
+                stage="CSV Import"
+            )
+            db.add(sample); db.commit(); db.refresh(sample)
+
+            # 4. Parameters
+            param_map = {
+                "N": safe_float(row.get('n')),
+                "P": safe_float(row.get('p')),
+                "K": safe_float(row.get('k')),
+                "pH": safe_float(row.get('ph')),
+                "Moisture": safe_float(row.get('moisture')),
+                "OC": safe_float(row.get('oc')),
+                "Temp": safe_float(row.get('temp')),
+                "NDVI": safe_float(row.get('ndvi'))
+            }
+
+            for p_name, p_val in param_map.items():
+                master_param = db.query(models.SoilParameterMaster).filter(models.SoilParameterMaster.name == p_name).first()
+                if master_param:
+                    db.add(models.SoilParameterValue(
+                        soil_sample_id=sample.soil_sample_id,
+                        parameter_id=master_param.parameter_id,
+                        value=p_val
+                    ))
+            
+            db.commit()
+
+            # 5. Trigger Background Task
+            background_tasks.add_task(SHSService.process_soil_sample, sample.soil_sample_id)
+            imported_count += 1
+
+        return {"message": f"Successfully imported {imported_count} records. Background processing started."}
 
     except Exception as e:
+        db.rollback()
         print(f"Import Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))

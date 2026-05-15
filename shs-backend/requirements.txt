@@ -7,3 +7,4 @@ pandas
 numpy
 scikit-fuzzy  # If needed for fuzzy logic, but the code uses numpy
 python-multipart
+geoalchemy2

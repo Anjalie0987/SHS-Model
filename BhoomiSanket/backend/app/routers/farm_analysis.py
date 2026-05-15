@@ -11,27 +11,26 @@ from shapely.geometry import Point
 import numpy as np
 import os
 
-# Cache for Maharashtra districts geometry
-MAH_DISTRICTS_GDF = None
+# Cache for all districts geometry
+ALL_DISTRICTS_GDF = None
 
-def load_maharashtra_districts():
-    global MAH_DISTRICTS_GDF
-    if MAH_DISTRICTS_GDF is not None:
+def load_all_districts():
+    global ALL_DISTRICTS_GDF
+    if ALL_DISTRICTS_GDF is not None:
         return
     
     try:
         shp_path = r'D:\CROP2\CROP2\BhoomiSanket\backend\data\shapefiles\district\DISTRICT_BOUNDARY_WGS84.shp'
         gdf = gpd.read_file(shp_path)
-        # Filter for Maharashtra only
-        # Note: Columns are ['District', 'STATE', ...]
-        MAH_DISTRICTS_GDF = gdf[gdf['STATE'].str.contains('MAHARASHTRA', case=False, na=False)].copy()
-        print(f"Loaded {len(MAH_DISTRICTS_GDF)} districts for Maharashtra.")
+        # Load all districts
+        ALL_DISTRICTS_GDF = gdf.copy()
+        print(f"Loaded {len(ALL_DISTRICTS_GDF)} districts.")
     except Exception as e:
         print(f"Error loading district shapefile: {e}")
-        MAH_DISTRICTS_GDF = None
+        ALL_DISTRICTS_GDF = None
 
 # Initialize on module load
-load_maharashtra_districts()
+load_all_districts()
 
 router = APIRouter(
     prefix="/farm-analysis",
@@ -46,15 +45,15 @@ def get_db():
         db.close()
 
 def get_district_from_coords(lat, lon):
-    if MAH_DISTRICTS_GDF is None:
-        return "MAHARASHTRA"
+    if ALL_DISTRICTS_GDF is None:
+        return "UNKNOWN"
     
     p = Point(lon, lat)
     # Check which district contains this point
-    for _, row in MAH_DISTRICTS_GDF.iterrows():
+    for _, row in ALL_DISTRICTS_GDF.iterrows():
         if row.geometry.contains(p):
             return str(row['District']).upper()
-    return "MAHARASHTRA"
+    return "UNKNOWN"
 
 @router.get("/locations", response_model=LocationHierarchy)
 def get_locations(db: Session = Depends(get_db)):
@@ -62,16 +61,44 @@ def get_locations(db: Session = Depends(get_db)):
     Fetch unique States and Districts for dropdowns.
     """
     try:
-        # Since currently we only have Maharashtra data in latlon_suitability
-        states = ["MAHARASHTRA"]
-        districts = {"MAHARASHTRA": []}
+        # Fetch states and districts from the Hierarchy tables (Chain of Responsibility)
+        query = """
+            SELECT DISTINCT s.name as state_name, d.name as district_name 
+            FROM state s
+            JOIN districts d ON s.state_code = d.state_code
+            WHERE s.name ILIKE '%MAHARASHTRA%'
+        """
+        results = db.execute(text(query)).fetchall()
         
-        if MAH_DISTRICTS_GDF is not None:
-            districts["MAHARASHTRA"] = sorted(MAH_DISTRICTS_GDF['District'].unique().tolist())
+        states_set = set()
+        districts_map = {}
+        
+        for row in results:
+            s_name = row[0] or "MAHARASHTRA"
+            d_name = row[1] or "Unknown"
+            
+            states_set.add(s_name)
+            if s_name not in districts_map:
+                districts_map[s_name] = []
+            if d_name not in districts_map[s_name]:
+                districts_map[s_name].append(d_name)
+        
+        # If DB is empty or no Maharashtra data found, fall back to shapefile names
+        if not states_set:
+            states = ["MAHARASHTRA"]
+            districts = {"MAHARASHTRA": []}
+            if ALL_DISTRICTS_GDF is not None:
+                # Filter shapefile for Maharashtra districts specifically
+                districts["MAHARASHTRA"] = sorted(ALL_DISTRICTS_GDF['District'].unique().tolist())
+            return {
+                "states": states,
+                "districts": districts,
+                "subdistricts": {}
+            }
             
         return {
-            "states": states,
-            "districts": districts,
+            "states": sorted(list(states_set)),
+            "districts": {s: sorted(d) for s, d in districts_map.items()},
             "subdistricts": {}
         }
     except Exception as e:
@@ -105,16 +132,16 @@ def get_farm_data(
         )
         
         # Spatial Join with Districts
-        if MAH_DISTRICTS_GDF is not None:
+        if ALL_DISTRICTS_GDF is not None:
             # Ensure CRS matches
-            dist_gdf = MAH_DISTRICTS_GDF.to_crs("EPSG:4326")
+            dist_gdf = ALL_DISTRICTS_GDF.to_crs("EPSG:4326")
             joined = gpd.sjoin(points_gdf, dist_gdf, how='left', predicate='within')
             # Extract District name (case insensitive match for 'District' column)
             dist_col = 'District' if 'District' in joined.columns else 'DISTRICT'
-            joined['detected_district'] = joined[dist_col].fillna("MAHARASHTRA").str.upper()
+            joined['detected_district'] = joined[dist_col].fillna("UNKNOWN").str.upper()
         else:
             joined = points_gdf
-            joined['detected_district'] = "MAHARASHTRA"
+            joined['detected_district'] = "UNKNOWN"
 
         farm_data = []
         for _, row in joined.iterrows():
@@ -124,22 +151,22 @@ def get_farm_data(
 
             farm_data.append({
                 "farmer_id": f"LATLON_{row['id']}",
-                "state": "MAHARASHTRA",
+                "state": row['state_name'] or "MAHARASHTRA",
                 "district": row['detected_district'],
                 "subdistrict": "N/A",
                 "latitude": row['lat'],
                 "longitude": row['lon'],
                 "lat": row['lat'],
                 "lon": row['lon'],
-                "nitrogen": row['n'],
-                "phosphorus": row['p'],
-                "potassium": row['k'],
+                "nitrogen": row['nitrogen'],
+                "phosphorus": row['phosphorus'],
+                "potassium": row['potassium'],
                 "ph": row['ph'],
-                "organic_carbon": row['oc'],
+                "organic_carbon": row['organic_carbon'],
                 "moisture": row['moisture'],
-                "temperature": row['temp'],
-                "shs_germination": row['germ_shs'],
-                "category_germination": row['germ_category'],
+                "temperature": row['temperature'],
+                "shs_germination": row['shs_score'],
+                "category_germination": row['shs_category'],
                 "soil_type": "N/A",
                 "crop_type": "Wheat",
                 "recommended_fertilizer": "N/A"

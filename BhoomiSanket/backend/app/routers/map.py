@@ -77,11 +77,13 @@ def load_and_simplify_shapefile(path):
         
         # Adaptive Simplification Logic - Done ONCE during load
         count = len(gdf)
-        tolerance = 0.001 # Default High detail
+        tolerance = 0.002 # Default Detail
         if count < 50: 
-             tolerance = 0.01 # Low detail (States)
+             tolerance = 0.02 # High Simplification (States)
         elif count < 200:
-             tolerance = 0.005 # Medium detail (Districts)
+             tolerance = 0.01 # Medium Simplification (Districts)
+        else:
+             tolerance = 0.005 # Strategic Simplification (Subdistricts)
              
         # Simplify geometries permanently in the cached copy
         gdf['geometry'] = gdf.geometry.simplify(tolerance)
@@ -159,15 +161,17 @@ def get_geojson(shp_path, filter_candidates=None, filter_val=None):
 def inject_soil_data(response_obj):
     try:
         from app.database import SessionLocal
-        from app.routers.germination import get_germination_state_stats, get_germination_district_stats
+        from app.routers.germination import get_germination_state_stats, get_germination_district_stats, get_germination_village_stats
         
         db = SessionLocal()
         state_stats = {}
         district_stats = {}
+        village_stats = {}
         try:
             # Get real stats from DB
             state_stats = get_germination_state_stats(db)
             district_stats = get_germination_district_stats(db)
+            village_stats = get_germination_village_stats(db)
         except Exception as e:
             print(f"Error fetching stats: {e}")
         finally:
@@ -181,9 +185,10 @@ def inject_soil_data(response_obj):
                 # Try to find a name for the matching
                 dist_name = (props.get('District') or props.get('DISTRICT') or props.get('DIST_NAME') or props.get('dtname') or "").strip().upper()
                 state_name = (props.get('STATE') or props.get('ST_NM') or props.get('stname') or "").strip().upper()
+                tehsil_name = (props.get('TEHSIL') or props.get('TEHSIL_NAM') or props.get('SUB_DIST') or props.get('SubDistrict') or props.get('Tehsil') or props.get('sdtname') or "").strip().upper()
                 
-                # Fetch stats (Priority: District, then State)
-                stats = district_stats.get(dist_name) or state_stats.get(state_name)
+                # Fetch stats (Priority: Village/Subdistrict, then District, then State)
+                stats = village_stats.get(tehsil_name) or district_stats.get(dist_name) or state_stats.get(state_name)
                 
                 if stats:
                     props.update(stats)
@@ -227,7 +232,7 @@ def _get_db_url():
 
 
 @router.get("/suitability/points")
-def get_latlon_suitability_points(limit: int = 5000, batch_id: str = Query(None)):
+def get_latlon_suitability_points(limit: int = 5000, stage: str = Query("Germination")):
     """
     NEW: Returns point suitability records (lat/lon) produced by shs-backend local-file pipeline.
     Reads from table `latlon_suitability`.
@@ -241,51 +246,40 @@ def get_latlon_suitability_points(limit: int = 5000, batch_id: str = Query(None)
         conn = psycopg2.connect(db_url)
         cur = conn.cursor()
 
-        if batch_id:
-            cur.execute(
-                """
-                SELECT lat, lon,
-                       germ_shs, germ_category,
-                       boot_shs, boot_category,
-                       rip_shs, rip_category,
-                       batch_id, source_file, created_at
-                FROM latlon_suitability
-                WHERE batch_id = %s
-                ORDER BY created_at DESC
-                LIMIT %s
-                """,
-                (batch_id, limit),
-            )
-        else:
-            cur.execute(
-                """
-                SELECT lat, lon,
-                       germ_shs, germ_category,
-                       boot_shs, boot_category,
-                       rip_shs, rip_category,
-                       batch_id, source_file, created_at
-                FROM latlon_suitability
-                ORDER BY created_at DESC
-                LIMIT %s
-                """,
-                (limit,),
-            )
+        cur.execute(
+            """
+            SELECT lat, lon, stage, shs_score, shs_category, created_at
+            FROM latlon_suitability
+            WHERE stage ILIKE %s
+            ORDER BY created_at DESC
+            LIMIT %s
+            """,
+            (stage, limit),
+        )
 
         rows = cur.fetchall()
         points = []
         for r in rows:
-            points.append(
-                {
-                    "lat": float(r[0]),
-                    "lon": float(r[1]),
-                    "germination": {"shs": r[2], "category": r[3]},
-                    "booting": {"shs": r[4], "category": r[5]},
-                    "ripening": {"shs": r[6], "category": r[7]},
-                    "batch_id": r[8],
-                    "source_file": r[9],
-                    "created_at": r[10].isoformat() if r[10] else None,
-                }
-            )
+            # Map the stage to the expected frontend format
+            # Currently frontend expects a nested structure like "germination": {"shs": ..., "category": ...}
+            # We will provide it dynamically based on the requested stage.
+            stage_key = r[2].lower() if r[2] else "germination"
+            
+            point = {
+                "lat": float(r[0]),
+                "lon": float(r[1]),
+                "created_at": r[5].isoformat() if r[5] else None,
+            }
+            # Create a mock structure for the UI to still work with missing stages, 
+            # while placing the actual requested stage's data.
+            point["germination"] = {"shs": None, "category": None}
+            point["booting"] = {"shs": None, "category": None}
+            point["ripening"] = {"shs": None, "category": None}
+            
+            if stage_key in ["germination", "booting", "ripening"]:
+                point[stage_key] = {"shs": r[3], "category": r[4]}
+                
+            points.append(point)
 
         return {"count": len(points), "points": points}
     except Exception as e:

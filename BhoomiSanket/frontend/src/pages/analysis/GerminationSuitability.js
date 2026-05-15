@@ -45,6 +45,7 @@ const ATTRIBUTES = [
     { key: "shs_germination", label: "Germination Suitability", unit: "%" },
     { key: "shs_booting", label: "Booting Suitability", unit: "%" },
     { key: "shs_ripening", label: "Ripening Suitability", unit: "%" },
+    { key: "shs_upload", label: "Uploaded Analysis", unit: "%" }, // NEW
     { key: "germ_points", label: "Germination Points", unit: "" },
     { key: "boot_points", label: "Booting Points", unit: "" },
     { key: "rip_points", label: "Ripening Points", unit: "" },
@@ -320,8 +321,27 @@ const SuitabilityHeatLayer = ({ points, stage, enabled }) => {
     return null;
 };
 
+// GLOBAL CACHE to avoid re-fetching same GeoJSON (Prevents "Loading..." lag)
+const geoCache = {};
+
 // Component to handle Vector Boundaries
-const VectorBoundaryLayer = ({ type, visible, weight = 1.5, color = '#9e9e9e', selectedAttribute, shsGermData, shsBootData, shsRipData, soilData, shsDistricts, stateFilter }) => {
+const VectorBoundaryLayer = ({ 
+    type, 
+    visible, 
+    weight = 1.5, 
+    color = '#9e9e9e', 
+    selectedAttribute, 
+    shsGermData, 
+    shsBootData, 
+    shsRipData, 
+    shsGermSubData, 
+    shsBootSubData, 
+    shsRipSubData, 
+    soilData, 
+    shsDistricts, 
+    stateFilter,
+    isOutline = false 
+}) => {
     const [geoJsonData, setGeoJsonData] = useState(null);
 
     useEffect(() => {
@@ -329,10 +349,21 @@ const VectorBoundaryLayer = ({ type, visible, weight = 1.5, color = '#9e9e9e', s
             setGeoJsonData(null);
             return;
         }
+
         const url = `${MAP_API_URL}/${type}`;
+        
+        // Use cache if available
+        if (geoCache[type]) {
+            setGeoJsonData(geoCache[type]);
+            return;
+        }
+
         fetch(url)
             .then(res => res.json())
-            .then(data => setGeoJsonData(data))
+            .then(data => {
+                geoCache[type] = data; // Save to global cache
+                setGeoJsonData(data);
+            })
             .catch(err => console.error(`Error fetching ${type} overlay:`, err));
     }, [type, visible]);
 
@@ -340,22 +371,32 @@ const VectorBoundaryLayer = ({ type, visible, weight = 1.5, color = '#9e9e9e', s
     // Pre-calculate normalized mapping for faster style lookup
     const normalizedData = useMemo(() => {
         const stage = selectedAttribute === 'shs_germination' ? 'germination' : (selectedAttribute === 'shs_booting' ? 'booting' : 'ripening');
-        const shsData = (stage === 'germination') ? shsGermData : (stage === 'booting' ? shsBootData : shsRipData);
-
-        const norm = {};
-        if (shsData) {
-            Object.entries(shsData).forEach(([k, v]) => {
-                norm[k.trim().toLowerCase()] = v;
-            });
+        let shsData;
+        if (type === 'subdistrict') {
+            shsData = (stage === 'germination') ? shsGermSubData : (stage === 'booting' ? shsBootSubData : shsRipSubData);
+        } else {
+            shsData = (stage === 'germination') ? shsGermData : (stage === 'booting' ? shsBootData : shsRipData);
         }
-        return norm;
-    }, [selectedAttribute, shsGermData, shsBootData, shsRipData]);
+
+        if (!shsData) return {};
+        
+        // Handle both raw dictionary and {type, data} wrapper
+        const actualData = (shsData.type && shsData.data) ? shsData.data : shsData;
+        
+        const normalized = {};
+        Object.keys(actualData).forEach(key => {
+            // Aggressive normalization: Upper, No spaces, No special chars
+            const cleanKey = key.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+            normalized[cleanKey] = actualData[key];
+        });
+        return normalized;
+    }, [type, selectedAttribute, shsGermData, shsBootData, shsRipData, shsGermSubData, shsBootSubData, shsRipSubData]);
 
     const normalizedSoil = useMemo(() => {
         const norm = {};
         if (soilData) {
             Object.entries(soilData).forEach(([k, v]) => {
-                norm[k.trim().toLowerCase()] = v;
+                norm[k.trim().toUpperCase()] = v;
             });
         }
         return norm;
@@ -365,32 +406,43 @@ const VectorBoundaryLayer = ({ type, visible, weight = 1.5, color = '#9e9e9e', s
     // This forces a full refresh of the GeoJSON layer (and its listeners) when data loads.
     const dataKey = useMemo(() => {
         const stage = selectedAttribute === 'shs_germination' ? 'germination' : (selectedAttribute === 'shs_booting' ? 'booting' : 'ripening');
-        const shsData = (stage === 'germination') ? shsGermData : (stage === 'booting' ? shsBootData : shsRipData);
+        
+        // Use either district or subdistrict data depending on layer type
+        let shsData;
+        if (type === 'subdistrict') {
+            shsData = (stage === 'germination') ? shsGermSubData : (stage === 'booting' ? shsBootSubData : shsRipSubData);
+        } else {
+            shsData = (stage === 'germination') ? shsGermData : (stage === 'booting' ? shsBootData : shsRipData);
+        }
 
-        // Count entries to detect when data actually arrives
         const shsCount = shsData ? Object.keys(shsData).length : 0;
         const soilCount = soilData ? Object.keys(soilData).length : 0;
 
         return `${type}-${selectedAttribute}-${shsCount}-${soilCount}`;
-    }, [type, selectedAttribute, shsGermData, shsBootData, shsRipData, soilData]);
+    }, [type, selectedAttribute, shsGermData, shsBootData, shsRipData, shsGermSubData, shsBootSubData, shsRipSubData, soilData]);
 
     const filteredData = useMemo(() => {
         if (!geoJsonData || !geoJsonData.features) return null;
-        if (!stateFilter || stateFilter === 'All States') return geoJsonData;
+        
+        const isAllStates = (!stateFilter || stateFilter === 'All States');
 
-        const filterU = stateFilter.trim().toUpperCase();
+        // Show all states when 'All States' is selected
+        if (isAllStates && type === 'state') {
+            return geoJsonData;
+        }
+
+        // DEFAULT: For districts and subdistricts, if All States is selected, we focus on Maharashtra to prevent browser crashes from too many polygons
+        const filterU = isAllStates ? 'MAHARASHTRA' : stateFilter.trim().toUpperCase();
+
         const filteredFeatures = geoJsonData.features.filter(f => {
             const p = f.properties;
-            // Check state name across multiple possible GeoJSON property keys
             const sName = (p.STATE || p.ST_NM || p.stname || p.State_Name || p.st_nm || "").trim().toUpperCase();
 
-            // If it's a state layer, the name of the feature itself must match the state filter
             if (type === 'state') {
                 const featureName = (p.STATE || p.ST_NM || p.stname || p.ST_NAME || "").trim().toUpperCase();
                 return featureName === filterU;
             }
 
-            // If it's a district or subdistrict layer, the parent state property must match the state filter
             return sName === filterU;
         });
 
@@ -399,69 +451,87 @@ const VectorBoundaryLayer = ({ type, visible, weight = 1.5, color = '#9e9e9e', s
 
     if (!filteredData || !visible || filteredData.features.length === 0) return null;
 
+    // Skip styling logic if it's just a bold outline
+    if (isOutline) {
+        return (
+            <GeoJSON 
+                key={`${dataKey}-outline`}
+                data={filteredData}
+                style={{
+                    fillColor: 'transparent',
+                    fillOpacity: 0,
+                    color: '#222',
+                    weight: 3,
+                    opacity: 0.8,
+                    interactive: false
+                }}
+            />
+        );
+    }
+
     const style = (feature) => {
         const props = feature.properties;
         const isState = type === 'state';
+        const isDistrict = type === 'district';
+        const isSubdistrict = type === 'subdistrict';
 
-        // Comprehensive name detection for highlighting
-        const featureName = (props.District || props.DISTRICT || props.DIST_NAME || props.dtname ||
-            props.TEHSIL || props.SUB_DIST || props.sdtname ||
-            props.STATE || props.ST_NM || props.stname || "Region").trim();
-
-        const districtName = featureName.toLowerCase();
-
-        // Data-to-Color matching
-        const val = props[selectedAttribute];
-
-        const isPointOrHeat = selectedAttribute?.endsWith('_points') || selectedAttribute?.endsWith('_heat');
-        if (selectedAttribute && !isPointOrHeat && (val !== undefined || selectedAttribute?.startsWith('shs_') || (soilData && type === 'district')) && (type === 'district' || type === 'state')) {
-            let fillColor = getExperimentalColor(selectedAttribute, val);
-
-            // SPECIAL LOGIC: If we are viewing suitability, check the live SHS data first
-            if (selectedAttribute === 'shs_germination' || selectedAttribute === 'shs_booting' || selectedAttribute === 'shs_ripening') {
-                const district = normalizedData[districtName];
-                if (district) {
-                    fillColor = getExperimentalColor(selectedAttribute, district.avg_shs);
-                } else {
-                    fillColor = 'transparent';
-                }
-            } else if (type === 'district' && normalizedSoil[districtName]) {
-                const isSHSDistrict = shsDistricts && shsDistricts.some(d => d.toLowerCase() === districtName);
-                if (isSHSDistrict) {
-                    const joinedVal = normalizedSoil[districtName][selectedAttribute];
-                    if (joinedVal !== undefined) {
-                        fillColor = getExperimentalColor(selectedAttribute, joinedVal);
-                    } else {
-                        fillColor = 'transparent';
-                    }
-                } else {
-                    fillColor = 'transparent';
-                }
-            }
-
+        // 1. STATE and DISTRICT are now BOUNDARY ONLY layers (No fill)
+        if (isState || isDistrict) {
             return {
-                fillColor: isState ? 'transparent' : fillColor,
-                fillOpacity: isState ? 0.05 : (fillColor === 'transparent' ? 0 : 0.75),
-                color: isState ? '#1a9850' : (type === 'district' ? '#000000' : '#666'),
-                weight: isState ? 2 : 0.8,
-                opacity: (isState || fillColor === 'transparent') ? 0.5 : 1,
-                dashArray: isState ? null : '3'
+                fillColor: 'transparent',
+                fillOpacity: 0,
+                color: isState ? '#1a9850' : '#222',
+                weight: isState ? 2.5 : 2,
+                opacity: 0.8,
+                interactive: false // Don't block clicks to subdistricts
             };
         }
 
+        // 2. Name Detection
+        let featureName = (props.TEHSIL || props.SUB_DIST || props.sdtname || props.TEHSIL_NAM || props.SubDistrict || props.Tehsil || 
+                           props.District || props.DISTRICT || props.DIST_NAME || props.dtname || "Region").trim();
+        
+        let districtName = featureName.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+        // NEW: Check if this is a district-level upload
+        const activeSHSData = (selectedAttribute === 'shs_germination') ? shsGermSubData : 
+                              (selectedAttribute === 'shs_booting' ? shsBootSubData : shsRipSubData);
+        const isDistrictUpload = activeSHSData?.type === 'district_upload';
+        if (isDistrictUpload && isSubdistrict) {
+            // Use the parent District property of the subdistrict feature
+            const parentDist = (props.District || props.DISTRICT || props.DIST_NAME || props.dtname || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+            districtName = parentDist;
+        }
+
+        // 3. COLORING (Only for Subdistricts)
+        let fillColor = 'transparent';
+        if (selectedAttribute && (selectedAttribute.startsWith('shs_') || selectedAttribute.includes('suitability'))) {
+            const region = normalizedData[districtName];
+            if (region) {
+                fillColor = getExperimentalColor(selectedAttribute, region.avg_shs);
+            }
+        }
+
         return {
-            fillColor: 'transparent',
-            fillOpacity: 0.05,
-            color: isState ? '#1a9850' : (type === 'district' ? '#000000' : color),
-            weight: weight,
+            fillColor: fillColor,
+            fillOpacity: fillColor === 'transparent' ? 0 : 0.75,
+            color: '#888', // Thin gray border for subdistricts
+            weight: 0.8,
             opacity: 1
         };
     };
 
     const onEachFeature = (feature, layer) => {
         const props = feature.properties;
-        const name = (props.District || props.DISTRICT || props.DIST_NAME || props.dtname || props.TEHSIL || props.SUB_DIST || props.sdtname || props.STATE || props.ST_NM || props.stname || 'Unknown').trim();
-        const districtName = name.toLowerCase();
+        let name = "";
+        if (type === 'subdistrict') {
+            name = (props.TEHSIL || props.SUB_DIST || props.sdtname || props.TEHSIL_NAM || props.SubDistrict || props.Tehsil || 
+                    props.District || props.DISTRICT || props.DIST_NAME || props.dtname || 'Unknown').trim();
+        } else {
+            name = (props.District || props.DISTRICT || props.DIST_NAME || props.dtname || 
+                    props.STATE || props.ST_NM || props.stname || 'Unknown').trim();
+        }
+        const districtName = name.trim().toUpperCase();
 
         // Hover highlighting logic
         layer.on({
@@ -491,23 +561,24 @@ const VectorBoundaryLayer = ({ type, visible, weight = 1.5, color = '#9e9e9e', s
 
                 if (isSHSAttribute) {
                     const stage = selectedAttribute === 'shs_germination' ? 'germination' : (selectedAttribute === 'shs_booting' ? 'booting' : 'ripening');
-
-                    let shsData;
-                    if (stage === 'germination') shsData = shsGermData;
-                    else if (stage === 'booting') shsData = shsBootData;
-                    else shsData = shsRipData;
-
                     const normalizedSHS = {};
-                    Object.entries(shsData || {}).forEach(([k, v]) => {
-                        normalizedSHS[k.trim().toLowerCase()] = v;
+                    const shsDataToUse = (type === 'subdistrict') 
+                        ? (stage === 'germination' ? shsGermSubData : (stage === 'booting' ? shsBootSubData : shsRipSubData))
+                        : (stage === 'germination' ? shsGermData : (stage === 'booting' ? shsBootData : shsRipData));
+
+                    // Unpack if wrapped in {type, data}
+                    const actualSHS = (shsDataToUse?.type && shsDataToUse?.data) ? shsDataToUse.data : (shsDataToUse || {});
+
+                    Object.entries(actualSHS).forEach(([k, v]) => {
+                        normalizedSHS[k.trim().toUpperCase()] = v;
                     });
-                    const district = normalizedSHS[districtName];
-                    if (district) {
-                        displayVal = district.avg_shs;
+                    const region = normalizedSHS[districtName];
+                    if (region) {
+                        displayVal = region.avg_shs;
                     }
-                } else if (type === 'district' && isSHSDistrict && soilData && soilData[districtName]) {
+                } else if ((type === 'district' || type === 'subdistrict') && isSHSDistrict && soilData && soilData[districtName]) {
                     displayVal = soilData[districtName][selectedAttribute];
-                } else if (type === 'state') {
+                } else if (type === 'state' || type === 'subdistrict') {
                     displayVal = props[selectedAttribute];
                 }
 
@@ -519,7 +590,7 @@ const VectorBoundaryLayer = ({ type, visible, weight = 1.5, color = '#9e9e9e', s
                     const formattedVal = typeof displayVal === 'number' ? displayVal.toFixed(2) : displayVal;
                     html += `<div class="mt-1 flex items-center gap-2">
                         <span class="text-xs text-gray-600">${label}:</span>
-                        <span class="text-sm font-bold text-green-700">${formattedVal}${attr?.unit || ''}</span>
+                        <span class="text-sm font-bold text-green-700">${formattedVal}${isSHSAttribute ? '%' : (attr?.unit || '')}</span>
                     </div>`;
                 }
 
@@ -634,10 +705,20 @@ const GerminationSuitability = () => {
     const [germShsData, setGermShsData] = useState(null);
     const [bootShsData, setBootShsData] = useState(null);
     const [ripShsData, setRipShsData] = useState(null);
+    const [germSubData, setGermSubData] = useState(null);
+    const [bootSubData, setBootSubData] = useState(null);
+    const [ripSubData, setRipSubData] = useState(null);
 
     // NEW: Lat/Lon suitability overlays
     const [latlonPoints, setLatlonPoints] = useState([]);
     const [shsDistricts, setShsDistricts] = useState([]);
+
+    // NEW: Handle CSV/Excel Upload for Analysis
+    const [uploading, setUploading] = useState(false);
+    const [uploadStage, setUploadStage] = useState('');
+    const [uploadState, setUploadState] = useState(''); // NEW: Selected state for upload
+    const [isUploadMode, setIsUploadMode] = useState(false);
+    const fileInputRef = useRef(null);
 
     // Master list of SHS districts for filtering soil attributes
     useEffect(() => {
@@ -649,23 +730,16 @@ const GerminationSuitability = () => {
             .catch(err => console.error("Error fetching master SHS districts:", err));
     }, []);
 
-    // Auto-focus logic: If an attribute is selected but no state is filtered, default to Maharashtra
-    // (since SHS models and detailed data are currently centered there).
-    // Also handle automatic layer visibility toggling.
     useEffect(() => {
-        if (selectedAttribute && !filters.state) {
-            setFilters((prev) => ({ ...prev, state: 'Maharashtra' }));
-        }
-
-        // Auto-show Districts and hide States when ANY attribute or suitability score is selected
+        // Auto-show Subdistricts and hide States when ANY attribute or suitability score is selected
         if (selectedAttribute) {
-            setShowDistricts(true);
+            setShowSubdistricts(true);
+            setShowDistricts(false);
             setShowStates(false);
-            setShowSubdistricts(false);
         } else if (!selectedAttribute && !showDistricts && !showSubdistricts && !showPoints) {
             setShowStates(true);
         }
-    }, [selectedAttribute, filters.state]);
+    }, [selectedAttribute]);
 
     // Flatten locations for searching
     const allSearchable = useMemo(() => {
@@ -737,33 +811,92 @@ const GerminationSuitability = () => {
         fetchData();
     }, [filters]);
 
-    // Fetch SHS Data
+    // Fetch SHS Data (Districts and Subdistricts)
+    // Unified Fetch for SHS Data (Districts and Subdistricts)
     useEffect(() => {
-        if (selectedAttribute === 'shs_germination') {
-            fetch(`${SHS_API_BASE_URL}/districts`)
-                .then(res => res.json())
-                .then(data => setGermShsData(data))
-                .catch(err => console.error("Error fetching germination SHS data:", err));
-        }
-    }, [selectedAttribute]);
+        const shsAttributes = ['shs_germination', 'shs_booting', 'shs_ripening'];
+        if (!shsAttributes.includes(selectedAttribute)) return;
+        if (isUploadMode) return;
 
-    useEffect(() => {
-        if (selectedAttribute === 'shs_booting') {
-            fetch(`${SHS_API_BASE_URL}/districts/booting`)
-                .then(res => res.json())
-                .then(data => setBootShsData(data))
-                .catch(err => console.error("Error fetching booting SHS data:", err));
+        const stage = selectedAttribute.replace('shs_', '');
+        const query = new URLSearchParams({ stage });
+        if (filters.state && filters.state !== 'All States') {
+            query.append('state', filters.state);
         }
-    }, [selectedAttribute]);
 
-    useEffect(() => {
-        if (selectedAttribute === 'shs_ripening') {
-            fetch(`${SHS_API_BASE_URL}/districts/ripening`)
-                .then(res => res.json())
-                .then(data => setRipShsData(data))
-                .catch(err => console.error("Error fetching ripening SHS data:", err));
+        const url = `${SHS_API_BASE_URL}/shs-map-data?${query.toString()}`;
+        
+        setLoading(true);
+        fetch(url)
+            .then(res => res.json())
+            .then(data => {
+                // Map data to the correct state based on stage
+                if (stage === 'germination') {
+                    setGermShsData(data);
+                    setGermSubData(data);
+                } else if (stage === 'booting') {
+                    setBootShsData(data);
+                    setBootSubData(data);
+                } else if (stage === 'ripening') {
+                    setRipShsData(data);
+                    setRipSubData(data);
+                }
+            })
+            .catch(err => console.error(`Error fetching ${stage} SHS data:`, err))
+            .finally(() => setLoading(false));
+            
+    }, [selectedAttribute, isUploadMode, filters.state]);
+
+    const handleFileUpload = async (event) => {
+        const file = event.target.files[0];
+        if (!file) return;
+
+        setUploading(true);
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('stage', uploadStage);
+        formData.append('state', uploadState); // NEW: Pass selected state
+
+        try {
+            const res = await fetch(`${SHS_API_BASE_URL}/upload-suitability`, {
+                method: 'POST',
+                body: formData,
+            });
+            const data = await res.json();
+            
+            if (res.ok) {
+                setIsUploadMode(true); 
+                
+                // Update the correct state based on selected stage
+                if (uploadStage === 'germination') {
+                    setGermSubData(data);
+                    setSelectedAttribute('shs_germination');
+                } else if (uploadStage === 'booting') {
+                    setBootSubData(data);
+                    setSelectedAttribute('shs_booting');
+                } else if (uploadStage === 'ripening') {
+                    setRipSubData(data);
+                    setSelectedAttribute('shs_ripening');
+                }
+
+                setShowSubdistricts(true);
+                handleFilterChange('state', 'Maharashtra');
+                alert(`Analysis Complete! Showing ${uploadStage.toUpperCase()} suitability from your file.`);
+            } else {
+                alert(`Upload failed: ${data.detail || 'Unknown error'}`);
+            }
+        } catch (err) {
+            console.error("Upload error:", err);
+            alert("Error connecting to server for analysis.");
+        } finally {
+            setUploading(false);
+            if (event.target) {
+                event.target.value = null; // Clear the input so the same file can be selected again
+            }
         }
-    }, [selectedAttribute]);
+    };
+
+
 
     // NEW: Fetch Lat/Lon suitability points (from main backend map endpoint)
     useEffect(() => {
@@ -829,6 +962,26 @@ const GerminationSuitability = () => {
         });
         return stats;
     }, [aggregatedDistrictData, shsDistricts]);
+
+    const handleDownloadCsv = () => {
+        const shsAttributes = ['shs_germination', 'shs_booting', 'shs_ripening', 'shs_upload'];
+        
+        let stage = 'germination'; // Default
+        if (selectedAttribute && shsAttributes.includes(selectedAttribute)) {
+            stage = selectedAttribute.replace('shs_', '');
+            if (stage === 'upload') stage = uploadStage || 'germination';
+        } else if (uploadStage) {
+            stage = uploadStage;
+        }
+
+        const query = new URLSearchParams({ stage });
+        if (filters.state && filters.state !== 'All States') {
+            query.append('state', filters.state);
+        }
+
+        const url = `${SHS_API_BASE_URL}/export-shs-csv?${query.toString()}`;
+        window.open(url, '_blank');
+    };
 
     // Handlers
     const handleFilterChange = (key, value) => {
@@ -925,47 +1078,27 @@ const GerminationSuitability = () => {
                         <VectorBoundaryLayer
                             type="state"
                             visible={showStates}
-                            weight={2}
-                            color="#666"
-                            selectedAttribute={selectedAttribute}
-                            attributeStats={attributeStats}
-                            shsGermData={germShsData}
-                            shsBootData={bootShsData}
-                            shsRipData={ripShsData}
                             stateFilter={filters.state}
                         />
 
-                        {/* Optional matched subdistrict highlight (if any) */}
+                        {/* 2. SUBDISTRICTS (The main color layer) */}
                         <VectorBoundaryLayer
                             type="subdistrict"
                             visible={showSubdistricts}
-                            weight={1}
-                            color="#ccc"
                             selectedAttribute={selectedAttribute}
-                            attributeStats={attributeStats}
-                            shsGermData={germShsData}
-                            shsBootData={bootShsData}
-                            shsRipData={ripShsData}
+                            shsGermSubData={germSubData}
+                            shsBootSubData={bootSubData}
+                            shsRipSubData={ripSubData}
                             stateFilter={filters.state}
                         />
 
-                        {/* Districts Layer (Now handles SHS and Soil Data logic internally) */}
+                        {/* 3. DISTRICT BOUNDARY (Bold Outline Only) */}
                         <VectorBoundaryLayer
                             type="district"
                             visible={showDistricts}
-                            weight={1.5}
-                            color="#444"
-                            selectedAttribute={selectedAttribute}
-                            attributeStats={attributeStats}
-                            shsGermData={germShsData}
-                            shsBootData={bootShsData}
-                            shsRipData={ripShsData}
-                            soilData={aggregatedDistrictData}
-                            shsDistricts={shsDistricts}
                             stateFilter={filters.state}
+                            isOutline={true}
                         />
-
-                        {/* SHS Choropleth Layers are now integrated into VectorBoundaryLayer */}
 
                         {/* NEW: Lat/Lon overlays */}
                         <SuitabilityHeatLayer points={latlonPoints} stage="germination" enabled={selectedAttribute === 'germ_heat'} />
@@ -1103,6 +1236,7 @@ const GerminationSuitability = () => {
                                     onClick={() => {
                                         setFilters({ state: '', district: '', subdistrict: '' });
                                         setSelectedAttribute(null);
+                                        setIsUploadMode(false); // RESET ISOLATION MODE
                                         setShowStates(true);
                                         setShowDistricts(false);
                                         setShowSubdistricts(false);
@@ -1137,10 +1271,23 @@ const GerminationSuitability = () => {
 
                                     <label className="flex items-center gap-2 cursor-pointer group text-[13px] text-gray-700">
                                         <input
+                                            type="checkbox"
+                                            checked={showSubdistricts}
+                                            onChange={(e) => setShowSubdistricts(e.target.checked)}
+                                            className="w-3.5 h-3.5 text-green-600 border-gray-300 rounded focus:ring-green-500 cursor-pointer"
+                                        />
+                                        <span className="group-hover:text-green-700 transition-colors">Subdistricts</span>
+                                    </label>
+
+                                    <label className="flex items-center gap-2 cursor-pointer group text-[13px] text-gray-700">
+                                        <input
                                             type="radio"
                                             name="suitability-radio"
                                             checked={selectedAttribute === 'shs_germination'}
-                                            onChange={() => setSelectedAttribute('shs_germination')}
+                                            onChange={() => {
+                                                setIsUploadMode(false); // EXIT ISOLATION ON MANUAL CLICK
+                                                setSelectedAttribute('shs_germination');
+                                            }}
                                             className="w-3.5 h-3.5 text-green-600 border-gray-300 rounded focus:ring-green-500 cursor-pointer"
                                         />
                                         <span className="group-hover:text-green-700 transition-colors capitalize">Germination Suitability</span>
@@ -1151,7 +1298,10 @@ const GerminationSuitability = () => {
                                             type="radio"
                                             name="suitability-radio"
                                             checked={selectedAttribute === 'shs_booting'}
-                                            onChange={() => setSelectedAttribute('shs_booting')}
+                                            onChange={() => {
+                                                setIsUploadMode(false); // EXIT ISOLATION ON MANUAL CLICK
+                                                setSelectedAttribute('shs_booting');
+                                            }}
                                             className="w-3.5 h-3.5 text-purple-600 border-gray-300 rounded focus:ring-purple-500 cursor-pointer"
                                         />
                                         <span className="group-hover:text-purple-700 transition-colors capitalize">Booting Suitability</span>
@@ -1162,7 +1312,10 @@ const GerminationSuitability = () => {
                                             type="radio"
                                             name="suitability-radio"
                                             checked={selectedAttribute === 'shs_ripening'}
-                                            onChange={() => setSelectedAttribute('shs_ripening')}
+                                            onChange={() => {
+                                                setIsUploadMode(false); // EXIT ISOLATION ON MANUAL CLICK
+                                                setSelectedAttribute('shs_ripening');
+                                            }}
                                             className="w-3.5 h-3.5 text-orange-600 border-gray-300 rounded focus:ring-orange-500 cursor-pointer"
                                         />
                                         <span className="group-hover:text-orange-700 transition-colors capitalize">Ripening Suitability</span>
@@ -1240,6 +1393,107 @@ const GerminationSuitability = () => {
 
 
                             </div>
+                        </div>
+
+                        {/* ADMIN TOOLS - UPLOAD SECTION */}
+                        <div className="mb-8 p-4 bg-green-50 rounded-xl border border-green-100">
+                            <h2 className="text-xs font-bold text-green-600 uppercase tracking-wide mb-3 flex items-center gap-2">
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04a11.357 11.357 0 00-1.026 5.49c0 5.12 3.325 9.47 7.901 10.959a11.955 11.955 0 01-1.026-5.49c0-5.12 3.325-9.47 7.901-10.959z" />
+                                </svg>
+                                Administrator Tools
+                            </h2>
+
+                            <div className="mb-3">
+                                <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">Select Analysis Stage</label>
+                                <select 
+                                    value={uploadStage}
+                                    onChange={(e) => setUploadStage(e.target.value)}
+                                    className="w-full bg-white border border-green-200 rounded-lg py-2 px-3 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-green-500 transition-all cursor-pointer"
+                                >
+                                    <option value="" disabled>Select Stage</option>
+                                    <option value="germination">Germination Analysis</option>
+                                    <option value="booting">Booting Analysis</option>
+                                    <option value="ripening">Ripening Analysis</option>
+                                </select>
+                            </div>
+
+                            <div className="mb-4">
+                                <label className="text-[10px] font-bold text-gray-500 uppercase block mb-1">Select State</label>
+                                <select 
+                                    value={uploadState}
+                                    onChange={(e) => setUploadState(e.target.value)}
+                                    className="w-full bg-white border border-green-200 rounded-lg py-2 px-3 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-green-500 transition-all cursor-pointer"
+                                >
+                                    <option value="" disabled>Select State</option>
+                                    {locations?.states?.map(s => <option key={s} value={s}>{s}</option>)}
+                                </select>
+                            </div>
+
+                            <button 
+                                onClick={() => fileInputRef.current?.click()}
+                                disabled={uploading || !uploadStage || !uploadState}
+                                className={`w-full py-2.5 px-4 rounded-lg font-bold text-sm transition-all flex items-center justify-center gap-2 ${
+                                    (uploading || !uploadStage || !uploadState)
+                                    ? 'bg-gray-200 text-gray-500 cursor-not-allowed' 
+                                    : 'bg-green-600 text-white hover:bg-green-700 shadow-sm active:scale-95'
+                                }`}
+                            >
+                                {uploading ? (
+                                    <>
+                                        <svg className="animate-spin h-4 w-4 text-gray-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                        </svg>
+                                        Analyzing...
+                                    </>
+                                ) : (
+                                    <>
+                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                                        </svg>
+                                        Upload CSV & Analyze Soil
+                                    </>
+                                )}
+                            </button>
+                            <input 
+                                type="file" 
+                                ref={fileInputRef} 
+                                onChange={handleFileUpload} 
+                                accept=".csv,.xlsx,.xls" 
+                                className="hidden" 
+                            />
+
+                            {isUploadMode && (
+                                <button 
+                                    onClick={() => {
+                                        setIsUploadMode(false);
+                                        // Force a re-fetch of global data
+                                        setSelectedAttribute(null);
+                                        setTimeout(() => setSelectedAttribute('shs_germination'), 50);
+                                    }}
+                                    className="w-full mt-2 py-1.5 px-4 rounded-lg font-bold text-[11px] bg-white text-green-600 border border-green-200 hover:bg-green-50 transition-all flex items-center justify-center gap-2"
+                                >
+                                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                                    </svg>
+                                    Return to Global Research Data
+                                </button>
+                            )}
+
+                            <button 
+                                onClick={handleDownloadCsv}
+                                className="w-full mt-3 py-2 px-4 rounded-lg font-bold text-[11px] bg-white text-emerald-600 border border-emerald-200 hover:bg-emerald-50 transition-all flex items-center justify-center gap-2 shadow-sm"
+                            >
+                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a2 2 0 002 2h12a2 2 0 002-2v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                                </svg>
+                                Download Filtered CSV
+                            </button>
+
+                            <p className="text-[10px] text-green-700 mt-2 text-center opacity-70 italic">
+                                Supports CSV and Excel formats
+                            </p>
                         </div>
 
                         <h2 className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-4">Soil Attributes</h2>

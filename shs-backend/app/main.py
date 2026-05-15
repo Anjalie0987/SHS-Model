@@ -18,6 +18,14 @@ try:
     with engine.begin() as conn:
         conn.execute(text("ALTER TABLE IF EXISTS latlon_suitability ADD COLUMN IF NOT EXISTS rip_shs DOUBLE PRECISION"))
         conn.execute(text("ALTER TABLE IF EXISTS latlon_suitability ADD COLUMN IF NOT EXISTS rip_category VARCHAR"))
+        # New cleanup columns
+        conn.execute(text("ALTER TABLE IF EXISTS wheat_shs_germination ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"))
+        conn.execute(text("ALTER TABLE IF EXISTS wheat_shs_booting ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"))
+        conn.execute(text("ALTER TABLE IF EXISTS wheat_shs_ripening ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"))
+        # New batch system columns
+        conn.execute(text("ALTER TABLE IF EXISTS wheat_shs_germination ADD COLUMN IF NOT EXISTS batch_id INTEGER REFERENCES upload_batch(id)"))
+        conn.execute(text("ALTER TABLE IF EXISTS wheat_shs_booting ADD COLUMN IF NOT EXISTS batch_id INTEGER REFERENCES upload_batch(id)"))
+        conn.execute(text("ALTER TABLE IF EXISTS wheat_shs_ripening ADD COLUMN IF NOT EXISTS batch_id INTEGER REFERENCES upload_batch(id)"))
 except Exception as e:
     # Don't hard-fail API startup if the DB is not reachable during dev.
     print(f"Warning: DB migration step failed: {e}")

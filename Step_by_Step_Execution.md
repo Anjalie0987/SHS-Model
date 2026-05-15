@@ -1,4 +1,4 @@
-cd# Step-by-step execution commands (run yourself)
+# Step-by-step execution commands (run yourself)
 
 **Assumptions:**
 * Workspace root: `C:\Users\sujan\Desktop\CROP2`
