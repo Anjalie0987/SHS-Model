@@ -10,6 +10,7 @@ import FarmerAuth from './pages/auth/FarmerAuth';
 import OfficerLogin from './pages/auth/OfficerLogin';
 import AdminLogin from './pages/auth/AdminLogin';
 import FarmerInputForm from './pages/farmer/FarmerInputForm';
+import FarmerAdvisory from './pages/farmer/FarmerAdvisory';
 import AnalysisPage from './pages/analysis/AnalysisPage';
 import Dashboard from './pages/dashboard/Dashboard';
 import GerminationSuitability from './pages/analysis/GerminationSuitability';
@@ -33,6 +34,7 @@ function App() {
         <Route path="/officer/login" element={<OfficerLogin />} />
         <Route path="/admin/login" element={<AdminLogin />} />
         <Route path="/farmer/form" element={<FarmerInputForm />} />
+        <Route path="/farmer/advisory" element={<FarmerAdvisory />} />
         <Route path="/analysis/:analysisId" element={<AnalysisPage />} />
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/germination-suitability" element={<GerminationSuitability />} />

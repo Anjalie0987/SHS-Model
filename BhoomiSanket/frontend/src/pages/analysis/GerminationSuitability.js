@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react';
+import html2canvas from 'html2canvas';
 import { MapContainer, CircleMarker, Popup, useMap, GeoJSON } from 'react-leaflet';
 import { useNavigate } from 'react-router-dom';
 import 'leaflet/dist/leaflet.css';
@@ -340,6 +341,8 @@ const VectorBoundaryLayer = ({
     soilData, 
     shsDistricts, 
     stateFilter,
+    districtFilter,
+    subdistrictFilter,
     isOutline = false 
 }) => {
     const [geoJsonData, setGeoJsonData] = useState(null);
@@ -432,7 +435,9 @@ const VectorBoundaryLayer = ({
         }
 
         // DEFAULT: For districts and subdistricts, if All States is selected, we focus on Maharashtra to prevent browser crashes from too many polygons
-        const filterU = isAllStates ? 'MAHARASHTRA' : stateFilter.trim().toUpperCase();
+        const stateFilterU = isAllStates ? 'MAHARASHTRA' : stateFilter.trim().toUpperCase();
+        const districtFilterU = districtFilter ? districtFilter.trim().toUpperCase() : null;
+        const subdistrictFilterU = subdistrictFilter ? subdistrictFilter.trim().toUpperCase() : null;
 
         const filteredFeatures = geoJsonData.features.filter(f => {
             const p = f.properties;
@@ -440,14 +445,36 @@ const VectorBoundaryLayer = ({
 
             if (type === 'state') {
                 const featureName = (p.STATE || p.ST_NM || p.stname || p.ST_NAME || "").trim().toUpperCase();
-                return featureName === filterU;
+                return featureName === stateFilterU;
             }
 
-            return sName === filterU;
+            if (sName !== stateFilterU) return false;
+
+            if (type === 'district') {
+                if (districtFilterU) {
+                    const dName = (p.DISTRICT || p.DIST_NAME || p.District || p.dtname || "").trim().toUpperCase();
+                    return dName === districtFilterU;
+                }
+                return true;
+            }
+
+            if (type === 'subdistrict') {
+                if (districtFilterU) {
+                    const dName = (p.DISTRICT || p.DIST_NAME || p.District || p.dtname || "").trim().toUpperCase();
+                    if (dName !== districtFilterU) return false;
+                }
+                if (subdistrictFilterU) {
+                    const sdName = (p.TEHSIL || p.SUB_DIST || p.sdtname || p.TEHSIL_NAM || p.SubDistrict || p.Tehsil || "").trim().toUpperCase();
+                    return sdName === subdistrictFilterU;
+                }
+                return true;
+            }
+
+            return true;
         });
 
         return { ...geoJsonData, features: filteredFeatures };
-    }, [geoJsonData, stateFilter, type]);
+    }, [geoJsonData, stateFilter, districtFilter, subdistrictFilter, type]);
 
     if (!filteredData || !visible || filteredData.features.length === 0) return null;
 
@@ -606,17 +633,19 @@ const VectorBoundaryLayer = ({
         layer.bindTooltip("", { sticky: true, className: 'custom-map-tooltip' });
     };
 
-    return <GeoJSON key={dataKey + stateFilter} data={filteredData} style={style} onEachFeature={onEachFeature} />;
+    return <GeoJSON key={`${type}-${selectedAttribute}-${!!filteredData}-${stateFilter}-${districtFilter}-${subdistrictFilter}`} data={filteredData} style={style} onEachFeature={onEachFeature} />;
 };
 
 
 // Component to handle automatic zooming based on filters
-const ZoomManager = ({ state, district }) => {
+const ZoomManager = ({ state, district, subdistrict }) => {
     const map = useMap();
 
     useEffect(() => {
         let url = "";
-        if (district) {
+        if (subdistrict && district) {
+            url = `${MAP_API_URL}/subdistrict?district=${encodeURIComponent(district)}`;
+        } else if (district) {
             url = `${MAP_API_URL}/district?filter=${encodeURIComponent(district)}`; // Just to get bounds
         } else if (state) {
             url = `${MAP_API_URL}/state?filter=${encodeURIComponent(state)}`;
@@ -629,12 +658,27 @@ const ZoomManager = ({ state, district }) => {
             .then(res => res.json())
             .then(data => {
                 if (data.features && data.features.length > 0) {
-                    const layer = L.geoJSON(data);
-                    map.fitBounds(layer.getBounds(), { padding: [20, 20] });
+                    let targetLayer = L.geoJSON(data);
+                    
+                    if (subdistrict) {
+                        const target = subdistrict.trim().toUpperCase();
+                        const subFeatures = data.features.filter(f => {
+                            const p = f.properties;
+                            const name = (p.TEHSIL || p.SUB_DIST || p.sdtname || p.TEHSIL_NAM || p.SubDistrict || p.Tehsil || "").trim().toUpperCase();
+                            return name === target;
+                        });
+                        if (subFeatures.length > 0) {
+                            targetLayer = L.geoJSON({ type: "FeatureCollection", features: subFeatures });
+                        }
+                    }
+
+                    if (targetLayer.getLayers().length > 0) {
+                        map.fitBounds(targetLayer.getBounds(), { padding: [20, 20] });
+                    }
                 }
             })
             .catch(err => console.error("ZoomManager error:", err));
-    }, [state, district, map]);
+    }, [state, district, subdistrict, map]);
 
     return null;
 };
@@ -688,12 +732,12 @@ const MapLegend = ({ attribute }) => {
 const GerminationSuitability = () => {
     // State
     const [locations, setLocations] = useState({ states: [], districts: {}, subdistricts: {} });
-    const [filters, setFilters] = useState({ state: '', district: '', subdistrict: '' });
+    const [filters, setFilters] = useState({ state: '', stateCode: '', district: '', districtCode: '', subdistrict: '' });
     const [farmData, setFarmData] = useState([]);
     const [selectedAttribute, setSelectedAttribute] = useState(null);
     const [loading, setLoading] = useState(false);
     const [searchTerm, setSearchTerm] = useState('');
-    const [showSuggestions, setShowSuggestions] = useState(false);
+    const [subdistrictsList, setSubdistrictsList] = useState([]);
     const [mapInstance, setMapInstance] = useState(null);
     const navigate = useNavigate();
 
@@ -741,43 +785,10 @@ const GerminationSuitability = () => {
         }
     }, [selectedAttribute]);
 
-    // Flatten locations for searching
-    const allSearchable = useMemo(() => {
-        const list = [];
-        if (!locations || !locations.states) return list;
-
-        locations.states.forEach(s => {
-            list.push({ type: 'state', name: s, state: s });
-            if (locations.districts && locations.districts[s]) {
-                locations.districts[s].forEach(d => {
-                    list.push({ type: 'district', name: d, state: s });
-                });
-            }
-        });
-        return list;
-    }, [locations]);
-
-    const filteredSuggestions = useMemo(() => {
-        if (!searchTerm.trim()) return [];
-        const term = searchTerm.toLowerCase();
-        return allSearchable.filter(item =>
-            item.name.toLowerCase().includes(term)
-        ).slice(0, 8);
-    }, [searchTerm, allSearchable]);
-
-    const handleSelectSuggestion = (item) => {
-        if (item.type === 'state') {
-            handleFilterChange('state', item.name);
-        } else {
-            setFilters({
-                state: item.state,
-                district: item.name,
-                subdistrict: ''
-            });
-        }
-        setSearchTerm('');
-        setShowSuggestions(false);
-    };
+    // Search logic removed in favor of cascading dropdowns
+    const allSearchable = [];
+    const filteredSuggestions = [];
+    const handleSelectSuggestion = () => {};
 
     // Fetch Locations (Dropdown Options)
     useEffect(() => {
@@ -792,7 +803,6 @@ const GerminationSuitability = () => {
         const fetchData = async () => {
             setLoading(true);
             try {
-                // Remove the early return for 'All States' to allow global data load
                 const query = new URLSearchParams();
                 if (filters.state && filters.state !== 'All States') query.append('state', filters.state);
                 if (filters.district) query.append('district', filters.district);
@@ -809,7 +819,27 @@ const GerminationSuitability = () => {
         };
 
         fetchData();
-    }, [filters]);
+    }, [filters.state, filters.district, filters.subdistrict]);
+
+    // Fetch Subdistrict List for Dropdown
+    useEffect(() => {
+        if (!filters.stateCode || !filters.districtCode) {
+            setSubdistrictsList([]);
+            return;
+        }
+
+        const fetchSubdistricts = async () => {
+            try {
+                const res = await fetch(`${API_BASE_URL}/subdistricts?state_code=${filters.stateCode}&district_code=${filters.districtCode}`);
+                const data = await res.json();
+                setSubdistrictsList(data);
+            } catch (err) {
+                console.error("Error fetching subdistricts:", err);
+            }
+        };
+
+        fetchSubdistricts();
+    }, [filters.stateCode, filters.districtCode]);
 
     // Fetch SHS Data (Districts and Subdistricts)
     // Unified Fetch for SHS Data (Districts and Subdistricts)
@@ -880,7 +910,16 @@ const GerminationSuitability = () => {
                 }
 
                 setShowSubdistricts(true);
-                handleFilterChange('state', 'Maharashtra');
+                // Find the state code from locations.states if available
+                const stateObj = locations.states.find(s => s.name.toLowerCase() === uploadState.toLowerCase());
+                setFilters(prev => ({ 
+                    ...prev, 
+                    state: stateObj ? stateObj.name : uploadState, 
+                    stateCode: stateObj ? stateObj.code.toString() : '',
+                    district: '', 
+                    districtCode: '', 
+                    subdistrict: '' 
+                }));
                 alert(`Analysis Complete! Showing ${uploadStage.toUpperCase()} suitability from your file.`);
             } else {
                 alert(`Upload failed: ${data.detail || 'Unknown error'}`);
@@ -983,6 +1022,35 @@ const GerminationSuitability = () => {
         window.open(url, '_blank');
     };
 
+    const handleExportMap = async () => {
+        const element = document.getElementById('export-map-container');
+        if (!element) return;
+        
+        try {
+            setUploading(true);
+            const canvas = await html2canvas(element, {
+                useCORS: true,
+                allowTaint: true,
+                backgroundColor: '#ffffff',
+                scale: 2, // High resolution
+                scrollY: -window.scrollY, // Fix scroll offset clipping
+                windowWidth: document.documentElement.offsetWidth,
+                windowHeight: document.documentElement.offsetHeight
+            });
+            const image = canvas.toDataURL("image/png");
+            
+            const link = document.createElement('a');
+            link.download = `shs-map-${filters.subdistrict || filters.district || filters.state || 'export'}.png`;
+            link.href = image;
+            link.click();
+        } catch (err) {
+            console.error("Error exporting map:", err);
+            alert("Could not export map. Please try again.");
+        } finally {
+            setUploading(false);
+        }
+    };
+
     // Handlers
     const handleFilterChange = (key, value) => {
         setFilters(prev => ({ ...prev, [key]: value }));
@@ -1005,62 +1073,97 @@ const GerminationSuitability = () => {
             `}</style>
             {/* Header */}
             <header className="h-16 bg-white shadow-sm border-b border-gray-200 z-20 px-6 flex justify-between items-center">
-                <SearchCloser onClickOutside={() => setShowSuggestions(false)} />
                 <h1 className="text-xl font-bold text-gray-800">Soil Health Analysis (Stage Specific)</h1>
 
-                <div className="flex gap-4 items-center flex-grow justify-center"   >
-                    {/* Search Box */}
-                    <div className="relative">
-                        <input
-                            type="text"
-                            placeholder="Search State or District..."
-                            className="border rounded px-3 py-1 text-sm text-gray-700 focus:outline-none focus:ring-1 focus:ring-green-500 w-48 md:w-64"
-                            value={searchTerm}
+                <div className="flex gap-3 items-center flex-grow justify-center">
+                    {/* State Dropdown */}
+                    <div className="flex flex-col">
+                        <select
+                            className="border rounded-lg px-3 py-1.5 text-sm text-gray-700 bg-white shadow-sm focus:ring-2 focus:ring-green-500 outline-none w-56 transition-all"
+                            value={filters.stateCode}
                             onChange={(e) => {
-                                setSearchTerm(e.target.value);
-                                setShowSuggestions(true);
+                                const code = e.target.value;
+                                const stateObj = locations.states.find(s => s.code.toString() === code);
+                                setFilters({
+                                    state: stateObj ? stateObj.name : '',
+                                    stateCode: code,
+                                    district: '',
+                                    districtCode: '',
+                                    subdistrict: ''
+                                });
+                                setShowStates(true);
+                                setShowDistricts(true);
+                                setShowSubdistricts(false);
                             }}
-                            onFocus={() => setShowSuggestions(true)}
-                        />
-                        {showSuggestions && filteredSuggestions.length > 0 && (
-                            <div className="absolute top-full left-0 right-0 bg-white border rounded shadow-lg mt-1 z-[1001] max-h-60 overflow-y-auto">
-                                {filteredSuggestions.map((item, idx) => (
-                                    <div
-                                        key={idx}
-                                        className="px-3 py-2 hover:bg-green-50 cursor-pointer text-sm border-b last:border-0"
-                                        onClick={() => handleSelectSuggestion(item)}
-                                    >
-                                        <div className="flex justify-between items-center">
-                                            <span className="font-semibold">{item.name}</span>
-                                            <span className="text-[10px] uppercase bg-gray-100 px-1 rounded text-gray-500">{item.type}</span>
-                                        </div>
-                                        {item.type === 'district' && (
-                                            <span className="text-[10px] text-gray-400 block uppercase">{item.state}</span>
-                                        )}
-                                    </div>
-                                ))}
-                            </div>
-                        )}
+                        >
+                            <option value="">Select State</option>
+                            {locations?.states?.map(s => (
+                                <option key={s.code} value={s.code}>
+                                    {s.name.charAt(0).toUpperCase() + s.name.slice(1)} (State Code = {s.code})
+                                </option>
+                            ))}
+                        </select>
                     </div>
-                </div>
 
-                <div className="flex gap-4">
-                    {/* Filters */}
-                    <select
-                        className="border rounded px-2 py-1 text-sm text-gray-700 focus:outline-none focus:ring-1 focus:ring-green-500"
-                        value={filters.state}
-                        onChange={(e) => handleFilterChange('state', e.target.value)}
-                    >
-                        <option value="">All States</option>
-                        {locations?.states?.map(s => <option key={s} value={s}>{s}</option>)}
-                    </select>
+                    {/* District Dropdown */}
+                    <div className="flex flex-col">
+                        <select
+                            className={`border rounded-lg px-3 py-1.5 text-sm text-gray-700 bg-white shadow-sm focus:ring-2 focus:ring-green-500 outline-none w-56 transition-all ${!filters.stateCode ? 'opacity-50 cursor-not-allowed' : ''}`}
+                            value={filters.districtCode}
+                            disabled={!filters.stateCode}
+                            onChange={(e) => {
+                                const code = e.target.value;
+                                const distList = locations.districts[filters.stateCode] || [];
+                                const distObj = distList.find(d => d.code.toString() === code);
+                                setFilters(prev => ({
+                                    ...prev,
+                                    district: distObj ? distObj.name : '',
+                                    districtCode: code,
+                                    subdistrict: ''
+                                }));
+                                setShowStates(true);
+                                setShowDistricts(true);
+                                setShowSubdistricts(true);
+                            }}
+                        >
+                            <option value="">Select District</option>
+                            {(locations?.districts[filters.stateCode] || []).map(d => (
+                                <option key={d.code} value={d.code}>
+                                    {d.name} (District Code = {d.code})
+                                </option>
+                            ))}
+                        </select>
+                    </div>
+
+                    {/* Subdistrict Dropdown */}
+                    <div className="relative">
+                        <select
+                            className={`border rounded-lg px-3 py-1.5 text-sm text-gray-700 bg-white shadow-sm focus:ring-2 focus:ring-green-500 outline-none w-56 transition-all ${!filters.districtCode ? 'opacity-50 cursor-not-allowed' : ''}`}
+                            value={filters.subdistrict}
+                            disabled={!filters.districtCode}
+                            onChange={(e) => {
+                                const val = e.target.value;
+                                setFilters(prev => ({ ...prev, subdistrict: val }));
+                                setShowStates(false);
+                                setShowDistricts(false);
+                                setShowSubdistricts(true);
+                            }}
+                        >
+                            <option value="">Select Subdistrict</option>
+                            {subdistrictsList.map(item => (
+                                <option key={item.id} value={item.name}>
+                                    {item.name}
+                                </option>
+                            ))}
+                        </select>
+                    </div>
                 </div>
             </header>
 
             <div className="flex-grow flex flex-col lg:flex-row">
 
                 {/* Left: Map */}
-                <div className="w-full lg:w-3/4 h-[70vh] lg:h-[calc(100vh-64px)] relative bg-white border-r border-gray-200">
+                <div id="export-map-container" className="w-full lg:w-3/4 h-[70vh] lg:h-[calc(100vh-64px)] relative bg-white border-r border-gray-200">
                     <MapContainer
                         center={INDIA_CENTER}
                         zoom={DEFAULT_ZOOM}
@@ -1068,11 +1171,12 @@ const GerminationSuitability = () => {
                         zoomDelta={0.1}
                         style={{ height: '100%', width: '100%', background: '#fff' }} // White Background for Vector Map
                         zoomControl={false}
+                        preferCanvas={true}
                     >
                         <MapInstanceCollector onMap={setMapInstance} />
 
                         {/* Map Behavior Manager */}
-                        <ZoomManager state={filters.state} />
+                        <ZoomManager state={filters.state} district={filters.district} subdistrict={filters.subdistrict} />
 
                         {/* Vector Global Overlays (Administrative Borders) */}
                         <VectorBoundaryLayer
@@ -1090,6 +1194,8 @@ const GerminationSuitability = () => {
                             shsBootSubData={bootSubData}
                             shsRipSubData={ripSubData}
                             stateFilter={filters.state}
+                            districtFilter={filters.district}
+                            subdistrictFilter={filters.subdistrict}
                         />
 
                         {/* 3. DISTRICT BOUNDARY (Bold Outline Only) */}
@@ -1097,6 +1203,7 @@ const GerminationSuitability = () => {
                             type="district"
                             visible={showDistricts}
                             stateFilter={filters.state}
+                            districtFilter={filters.district}
                             isOutline={true}
                         />
 
@@ -1234,7 +1341,7 @@ const GerminationSuitability = () => {
                                 Map View
                                 <button
                                     onClick={() => {
-                                        setFilters({ state: '', district: '', subdistrict: '' });
+                                        setFilters({ state: '', stateCode: '', district: '', districtCode: '', subdistrict: '' });
                                         setSelectedAttribute(null);
                                         setIsUploadMode(false); // RESET ISOLATION MODE
                                         setShowStates(true);
@@ -1279,48 +1386,7 @@ const GerminationSuitability = () => {
                                         <span className="group-hover:text-green-700 transition-colors">Subdistricts</span>
                                     </label>
 
-                                    <label className="flex items-center gap-2 cursor-pointer group text-[13px] text-gray-700">
-                                        <input
-                                            type="radio"
-                                            name="suitability-radio"
-                                            checked={selectedAttribute === 'shs_germination'}
-                                            onChange={() => {
-                                                setIsUploadMode(false); // EXIT ISOLATION ON MANUAL CLICK
-                                                setSelectedAttribute('shs_germination');
-                                            }}
-                                            className="w-3.5 h-3.5 text-green-600 border-gray-300 rounded focus:ring-green-500 cursor-pointer"
-                                        />
-                                        <span className="group-hover:text-green-700 transition-colors capitalize">Germination Suitability</span>
-                                        {selectedAttribute === 'shs_germination' && !germShsData && <span className="animate-pulse text-[9px] text-orange-500 font-bold ml-1">Loading...</span>}
-                                    </label>
-                                    <label className="flex items-center gap-2 cursor-pointer group text-[13px] text-gray-700">
-                                        <input
-                                            type="radio"
-                                            name="suitability-radio"
-                                            checked={selectedAttribute === 'shs_booting'}
-                                            onChange={() => {
-                                                setIsUploadMode(false); // EXIT ISOLATION ON MANUAL CLICK
-                                                setSelectedAttribute('shs_booting');
-                                            }}
-                                            className="w-3.5 h-3.5 text-purple-600 border-gray-300 rounded focus:ring-purple-500 cursor-pointer"
-                                        />
-                                        <span className="group-hover:text-purple-700 transition-colors capitalize">Booting Suitability</span>
-                                        {selectedAttribute === 'shs_booting' && !bootShsData && <span className="animate-pulse text-[9px] text-orange-500 font-bold ml-1">Loading...</span>}
-                                    </label>
-                                    <label className="flex items-center gap-2 cursor-pointer group text-[13px] text-gray-700">
-                                        <input
-                                            type="radio"
-                                            name="suitability-radio"
-                                            checked={selectedAttribute === 'shs_ripening'}
-                                            onChange={() => {
-                                                setIsUploadMode(false); // EXIT ISOLATION ON MANUAL CLICK
-                                                setSelectedAttribute('shs_ripening');
-                                            }}
-                                            className="w-3.5 h-3.5 text-orange-600 border-gray-300 rounded focus:ring-orange-500 cursor-pointer"
-                                        />
-                                        <span className="group-hover:text-orange-700 transition-colors capitalize">Ripening Suitability</span>
-                                        {selectedAttribute === 'shs_ripening' && !ripShsData && <span className="animate-pulse text-[9px] text-orange-500 font-bold ml-1">Loading...</span>}
-                                    </label>
+
                                     <div className="pt-2 mt-2 border-t border-gray-100">
                                         <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">Lat/Lon Suitability</div>
 
@@ -1426,7 +1492,7 @@ const GerminationSuitability = () => {
                                     className="w-full bg-white border border-green-200 rounded-lg py-2 px-3 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-green-500 transition-all cursor-pointer"
                                 >
                                     <option value="" disabled>Select State</option>
-                                    {locations?.states?.map(s => <option key={s} value={s}>{s}</option>)}
+                                    {locations?.states?.map(s => <option key={s.code} value={s.name}>{s.name.charAt(0).toUpperCase() + s.name.slice(1)}</option>)}
                                 </select>
                             </div>
 
@@ -1464,22 +1530,15 @@ const GerminationSuitability = () => {
                                 className="hidden" 
                             />
 
-                            {isUploadMode && (
-                                <button 
-                                    onClick={() => {
-                                        setIsUploadMode(false);
-                                        // Force a re-fetch of global data
-                                        setSelectedAttribute(null);
-                                        setTimeout(() => setSelectedAttribute('shs_germination'), 50);
-                                    }}
-                                    className="w-full mt-2 py-1.5 px-4 rounded-lg font-bold text-[11px] bg-white text-green-600 border border-green-200 hover:bg-green-50 transition-all flex items-center justify-center gap-2"
-                                >
-                                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                                    </svg>
-                                    Return to Global Research Data
-                                </button>
-                            )}
+                            <button 
+                                onClick={handleExportMap}
+                                className="w-full mt-2 py-1.5 px-4 rounded-lg font-bold text-[11px] bg-white text-green-600 border border-green-200 hover:bg-green-50 transition-all flex items-center justify-center gap-2"
+                            >
+                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a2 2 0 002 2h12a2 2 0 002-2v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                                </svg>
+                                Export Map
+                            </button>
 
                             <button 
                                 onClick={handleDownloadCsv}

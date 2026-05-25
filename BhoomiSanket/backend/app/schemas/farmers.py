@@ -14,6 +14,8 @@ class FarmerBase(BaseModel):
 
 class FarmerCreate(FarmerBase):
     password: str
+    aadhaar: Optional[str] = None
+    area_ha: Optional[float] = None
 
 class FarmerLogin(BaseModel):
     mobile_number: constr(min_length=10, max_length=10)
@@ -21,7 +23,7 @@ class FarmerLogin(BaseModel):
 
 class FarmerResponse(FarmerBase):
     id: int
-    created_at: datetime
+    created_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True

@@ -4,6 +4,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 import json
+import asyncio
 
 # Load environment variables
 load_dotenv()
@@ -15,9 +16,40 @@ except ImportError:
 
 from app.database import engine, Base
 from app import models
+from sqlalchemy import text
 Base.metadata.create_all(bind=engine)
 
+try:
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE IF EXISTS farmer ADD COLUMN IF NOT EXISTS gender VARCHAR(20)"))
+        conn.execute(text("ALTER TABLE IF EXISTS farmer ADD COLUMN IF NOT EXISTS dob TIMESTAMP"))
+        conn.execute(text("ALTER TABLE IF EXISTS farm ADD COLUMN IF NOT EXISTS plot_number VARCHAR(100)"))
+except Exception as e:
+    print(f"Warning: DB migration step failed: {e}")
+
 app = FastAPI(title="BhoomiSanket API", version="0.1.0")
+
+from app.database import SessionLocal
+
+async def clean_old_farmer_results():
+    while True:
+        try:
+            db = SessionLocal()
+            # Delete records older than 7 days from all 3 stage tables
+            for table in ("farmer_result_germ", "farmer_result_boot", "farmer_result_rip"):
+                db.execute(text(f"DELETE FROM {table} WHERE created_at < NOW() - INTERVAL '7 days'"))
+            db.commit()
+            db.close()
+            print("Successfully cleaned up old farmer result data from all stage tables.")
+        except Exception as e:
+            print(f"Error cleaning up old farmer data: {e}")
+        
+        # Sleep for 24 hours
+        await asyncio.sleep(86400)
+
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(clean_old_farmer_results())
 
 # CORS Configuration
 origins = [
@@ -59,6 +91,9 @@ app.include_router(farmers.router)
 
 from app.routers import germination
 app.include_router(germination.router)
+
+from app.routers import advisory
+app.include_router(advisory.router)
 
 def get_db_connection():
     try:

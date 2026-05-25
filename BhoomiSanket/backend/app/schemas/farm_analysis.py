@@ -22,10 +22,23 @@ class FarmDataResponse(BaseModel):
     soil_type: Optional[str] = None
     recommended_fertilizer: Optional[str] = None
 
+class StateInfo(BaseModel):
+    name: str
+    code: int
+
+class DistrictInfo(BaseModel):
+    name: str
+    code: int
+    state_code: int
+
+class SubdistrictInfo(BaseModel):
+    name: str
+    id: int
+
 class LocationHierarchy(BaseModel):
-    states: List[str]
-    districts: dict  # state -> [districts]
-    subdistricts: dict # district -> [subdistricts]
+    states: List[StateInfo]
+    districts: dict  # state_code -> List[DistrictInfo]
+    subdistricts: Optional[dict] = {} # district_code -> [subdistricts]
 
 class AnalysisResponse(BaseModel):
     data: List[FarmDataResponse]

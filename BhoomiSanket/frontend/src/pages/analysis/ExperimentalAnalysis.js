@@ -112,7 +112,7 @@ const getLegendData = (attr) => {
     ];
 };
 
-const VectorBoundaryLayer = ({ type, visible, weight = 1.5, color = '#9e9e9e', matchedSubdistricts, selectedAttribute }) => {
+const VectorBoundaryLayer = ({ type, visible, weight = 1.5, color = '#9e9e9e', matchedSubdistricts, selectedAttribute, stateFilter, districtFilter, subdistrictFilter }) => {
     const [geoJsonData, setGeoJsonData] = useState(null);
 
     useEffect(() => {
@@ -126,6 +126,51 @@ const VectorBoundaryLayer = ({ type, visible, weight = 1.5, color = '#9e9e9e', m
             .then(data => setGeoJsonData(data))
             .catch(err => console.error(`Error fetching ${type} overlay:`, err));
     }, [type, visible]);
+
+    const filteredData = useMemo(() => {
+        if (!geoJsonData || !geoJsonData.features) return null;
+        
+        const isAllStates = (!stateFilter || stateFilter === 'All States');
+        const stateFilterU = isAllStates ? 'MAHARASHTRA' : stateFilter.trim().toUpperCase();
+        const districtFilterU = districtFilter ? districtFilter.trim().toUpperCase() : null;
+        const subdistrictFilterU = subdistrictFilter ? subdistrictFilter.trim().toUpperCase() : null;
+
+        const filteredFeatures = geoJsonData.features.filter(f => {
+            const p = f.properties;
+            const sName = (p.STATE || p.ST_NM || p.stname || p.State_Name || p.st_nm || "").trim().toUpperCase();
+
+            if (type === 'state') {
+                const featureName = (p.STATE || p.ST_NM || p.stname || p.ST_NAME || "").trim().toUpperCase();
+                return featureName === stateFilterU;
+            }
+
+            if (sName !== stateFilterU) return false;
+
+            if (type === 'district') {
+                if (districtFilterU) {
+                    const dName = (p.DISTRICT || p.DIST_NAME || p.District || p.dtname || "").trim().toUpperCase();
+                    return dName === districtFilterU;
+                }
+                return true;
+            }
+
+            if (type === 'subdistrict') {
+                if (districtFilterU) {
+                    const dName = (p.DISTRICT || p.DIST_NAME || p.District || p.dtname || "").trim().toUpperCase();
+                    if (dName !== districtFilterU) return false;
+                }
+                if (subdistrictFilterU) {
+                    const sdName = (p.TEHSIL || p.SUB_DIST || p.sdtname || p.TEHSIL_NAM || p.SubDistrict || p.Tehsil || "").trim().toUpperCase();
+                    return sdName === subdistrictFilterU;
+                }
+                return true;
+            }
+
+            return true;
+        });
+
+        return { ...geoJsonData, features: filteredFeatures };
+    }, [geoJsonData, stateFilter, districtFilter, subdistrictFilter, type]);
 
     const style = (feature) => {
         const props = feature.properties;
@@ -195,9 +240,9 @@ const VectorBoundaryLayer = ({ type, visible, weight = 1.5, color = '#9e9e9e', m
         layer.bindTooltip("", { sticky: true, className: 'custom-map-tooltip' });
     };
 
-    if (!geoJsonData || !visible) return null;
+    if (!filteredData || !visible || filteredData.features.length === 0) return null;
 
-    return <GeoJSON key={`${type}-${selectedAttribute}-${!!geoJsonData}`} data={geoJsonData} style={style} onEachFeature={onEachFeature} />;
+    return <GeoJSON key={`${type}-${selectedAttribute}-${!!filteredData}-${stateFilter}-${districtFilter}-${subdistrictFilter}`} data={filteredData} style={style} onEachFeature={onEachFeature} />;
 };
 
 
@@ -492,7 +537,7 @@ const ExperimentalAnalysis = () => {
                         {/* Map Behavior Manager */}
                         <ZoomManager state={filters.state} />
 
-                        {/* Vector Global Overlays (Administrative Borders) */}
+                        {/* Global Map Overlays */}
                         <VectorBoundaryLayer
                             type="state"
                             visible={showStates}
@@ -501,6 +546,7 @@ const ExperimentalAnalysis = () => {
                             matchedSubdistricts={matchedSubdistricts}
                             selectedAttribute={selectedAttribute}
                             attributeStats={attributeStats}
+                            stateFilter={filters.state}
                         />
 
                         {/* Optional matched subdistrict highlight (if any) */}
@@ -509,20 +555,25 @@ const ExperimentalAnalysis = () => {
                             visible={showSubdistricts}
                             weight={1}
                             color="#ccc"
-                            matchedSubdistricts={matchedSubdistricts}
                             selectedAttribute={selectedAttribute}
-                            attributeStats={attributeStats}
+                            stateFilter={filters.state}
                         />
-
-                        {/* Districts Layer (Now handles the internal variation) */}
                         <VectorBoundaryLayer
                             type="district"
                             visible={showDistricts}
-                            weight={1.5}
-                            color="#444"
-                            matchedSubdistricts={matchedSubdistricts}
                             selectedAttribute={selectedAttribute}
-                            attributeStats={attributeStats}
+                            matchedSubdistricts={matchedSubdistricts}
+                            stateFilter={filters.state}
+                            districtFilter={filters.district}
+                        />
+                        <VectorBoundaryLayer
+                            type="subdistrict"
+                            visible={showSubdistricts}
+                            selectedAttribute={selectedAttribute}
+                            matchedSubdistricts={matchedSubdistricts}
+                            stateFilter={filters.state}
+                            districtFilter={filters.district}
+                            subdistrictFilter={filters.subdistrict}
                         />
                     </MapContainer>
 

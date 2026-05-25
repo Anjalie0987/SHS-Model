@@ -241,7 +241,7 @@ const PointsBoundsFitter = ({ data }) => {
 const AnalysisPage = () => {
     // State
     const [locations, setLocations] = useState({ states: [], districts: {}, subdistricts: {} });
-    const [filters, setFilters] = useState({ state: '', district: '', subdistrict: '' });
+    const [filters, setFilters] = useState({ state: '', stateCode: '', district: '', districtCode: '', subdistrict: '' });
     const [farmData, setFarmData] = useState([]);
     const [selectedAttribute, setSelectedAttribute] = useState('nitrogen');
     const [loading, setLoading] = useState(false);
@@ -283,22 +283,24 @@ const AnalysisPage = () => {
 
     // Derived Options for Dropdowns
     const districtOptions = useMemo(() => {
-        return filters.state ? (locations.districts[filters.state] || []) : [];
-    }, [locations, filters.state]);
+        return filters.stateCode ? (locations.districts[filters.stateCode] || []) : [];
+    }, [locations, filters.stateCode]);
 
     const subdistrictOptions = useMemo(() => {
         return filters.district ? (locations.subdistricts[filters.district] || []) : [];
     }, [locations, filters.district]);
 
     // Handlers
-    const handleFilterChange = (key, value) => {
+    const handleFilterChange = (key, value, code = null) => {
         setFilters(prev => {
             const newFilters = { ...prev, [key]: value };
-            // Reset dependent filters
             if (key === 'state') {
+                newFilters.stateCode = code;
                 newFilters.district = '';
+                newFilters.districtCode = '';
                 newFilters.subdistrict = '';
             } else if (key === 'district') {
+                newFilters.districtCode = code;
                 newFilters.subdistrict = '';
             }
             return newFilters;
@@ -314,21 +316,29 @@ const AnalysisPage = () => {
                     {/* Filters */}
                     <select
                         className="border rounded px-2 py-1 text-sm text-gray-700 focus:outline-none focus:ring-1 focus:ring-green-500"
-                        value={filters.state}
-                        onChange={(e) => handleFilterChange('state', e.target.value)}
+                        value={filters.stateCode}
+                        onChange={(e) => {
+                            const code = e.target.value;
+                            const stateObj = locations.states.find(s => s.code.toString() === code);
+                            handleFilterChange('state', stateObj ? stateObj.name : '', code);
+                        }}
                     >
                         <option value="">All States</option>
-                        {locations.states.map(s => <option key={s} value={s}>{s}</option>)}
+                        {locations.states.map(s => <option key={s.code} value={s.code}>{s.name} (Code: {s.code})</option>)}
                     </select>
 
                     <select
                         className="border rounded px-2 py-1 text-sm text-gray-700 focus:outline-none focus:ring-1 focus:ring-green-500"
-                        value={filters.district}
-                        onChange={(e) => handleFilterChange('district', e.target.value)}
+                        value={filters.districtCode}
+                        onChange={(e) => {
+                            const code = e.target.value;
+                            const distObj = districtOptions.find(d => d.code.toString() === code);
+                            handleFilterChange('district', distObj ? distObj.name : '', code);
+                        }}
                         disabled={!filters.state}
                     >
                         <option value="">All Districts</option>
-                        {districtOptions.map(d => <option key={d} value={d}>{d}</option>)}
+                        {districtOptions.map(d => <option key={d.code} value={d.code}>{d.name} (Code: {d.code})</option>)}
                     </select>
 
                     <select
@@ -338,7 +348,7 @@ const AnalysisPage = () => {
                         disabled={!filters.district}
                     >
                         <option value="">All Sub-districts</option>
-                        {subdistrictOptions.map(s => <option key={s} value={s}>{s}</option>)}
+                        {subdistrictOptions.map(s => <option key={s.id || s} value={s.name || s}>{s.name || s}</option>)}
                     </select>
                 </div>
             </header>

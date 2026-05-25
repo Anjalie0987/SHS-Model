@@ -26,6 +26,11 @@ try:
         conn.execute(text("ALTER TABLE IF EXISTS wheat_shs_germination ADD COLUMN IF NOT EXISTS batch_id INTEGER REFERENCES upload_batch(id)"))
         conn.execute(text("ALTER TABLE IF EXISTS wheat_shs_booting ADD COLUMN IF NOT EXISTS batch_id INTEGER REFERENCES upload_batch(id)"))
         conn.execute(text("ALTER TABLE IF EXISTS wheat_shs_ripening ADD COLUMN IF NOT EXISTS batch_id INTEGER REFERENCES upload_batch(id)"))
+        
+        # New Farmer Registration columns
+        conn.execute(text("ALTER TABLE IF EXISTS farmer ADD COLUMN IF NOT EXISTS gender VARCHAR(20)"))
+        conn.execute(text("ALTER TABLE IF EXISTS farmer ADD COLUMN IF NOT EXISTS dob TIMESTAMP"))
+        conn.execute(text("ALTER TABLE IF EXISTS farm ADD COLUMN IF NOT EXISTS plot_number VARCHAR(100)"))
 except Exception as e:
     # Don't hard-fail API startup if the DB is not reachable during dev.
     print(f"Warning: DB migration step failed: {e}")
@@ -48,8 +53,10 @@ app.add_middleware(
 )
 
 # Include routers
-from app.routers import shs
+from app.routers import shs, farmers
 app.include_router(shs.router, prefix="/api", tags=["SHS"])
+app.include_router(farmers.router, prefix="/api/farmers", tags=["Farmers"])
+app.include_router(farmers.router, prefix="/farmers", tags=["Farmers Legacy"]) # Support direct /farmers calls
 
 @app.get("/")
 def read_root():

@@ -62,8 +62,10 @@ class Farmer(Base):
     farmer_id = Column(Integer, primary_key=True, index=True)
     name = Column(String(150))
     mobile = Column(String(15), unique=True, index=True)
-    aadhaar_encrypted = Column(String) # Encrypted
+    aadhaar_encrypted = Column(String, nullable=True) # Encrypted
     password = Column(String) # For authentication
+    gender = Column(String(20), nullable=True)
+    dob = Column(DateTime, nullable=True)
     
     farms = relationship("Farm", back_populates="farmer")
 
@@ -73,8 +75,9 @@ class Farm(Base):
     farmer_id = Column(Integer, ForeignKey('farmer.farmer_id'))
     village_id = Column(Integer, ForeignKey('village.village_id'))
     farm_name = Column(String(150))
-    area_ha = Column(Float)
-    geom = Column(Geometry('POLYGON', srid=4326))
+    plot_number = Column(String(100), nullable=True)
+    area_ha = Column(Float, nullable=True)
+    geom = Column(Geometry('POLYGON', srid=4326), nullable=True)
     
     farmer = relationship("Farmer", back_populates="farms")
     village = relationship("Village", back_populates="farms")
@@ -198,6 +201,7 @@ class CropRecommendation(Base):
     __tablename__ = 'crop_recommendation'
     recommendation_id = Column(Integer, primary_key=True, index=True)
     farm_id = Column(Integer, ForeignKey('farm.farm_id'))
+    farmer_id = Column(Integer, ForeignKey('farmer.farmer_id'), nullable=True)
     crop_id = Column(Integer, ForeignKey('crop_master.crop_id'))
     suitability_score = Column(Float)
     recommended = Column(Boolean)

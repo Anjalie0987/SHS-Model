@@ -18,7 +18,9 @@ const FarmerRegistration = () => {
         state: '',
         district: '',
         village: '',
-        plot_number: ''
+        plot_number: '',
+        aadhaar: '',
+        area_ha: ''
     });
 
     const handleInputChange = (e) => {
@@ -171,13 +173,25 @@ const FarmerRegistration = () => {
                                                     <option value="Other">Other</option>
                                                 </select>
                                             </div>
-                                            <div className="md:col-span-2">
+                                            <div>
                                                 <label className="block text-sm font-semibold text-gray-700 mb-2">Date of Birth</label>
                                                 <input
                                                     type="date"
                                                     name="dob"
                                                     value={formData.dob}
                                                     onChange={handleInputChange}
+                                                    className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-brand-primary focus:border-brand-primary outline-none shadow-sm"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm font-semibold text-gray-700 mb-2">Aadhaar Number</label>
+                                                <input
+                                                    type="text"
+                                                    name="aadhaar"
+                                                    value={formData.aadhaar}
+                                                    onChange={handleInputChange}
+                                                    placeholder="Enter 12-digit Aadhaar"
+                                                    maxLength="12"
                                                     className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-brand-primary focus:border-brand-primary outline-none shadow-sm"
                                                 />
                                             </div>
@@ -238,17 +252,31 @@ const FarmerRegistration = () => {
                                             <span className="w-8 h-8 bg-brand-primary/10 text-brand-primary rounded-full flex items-center justify-center mr-3 text-sm">3</span>
                                             Land Details
                                         </h3>
-                                        <div>
-                                            <label className="block text-sm font-semibold text-gray-700 mb-2">Survey / Khasra / Plot Number</label>
-                                            <input
-                                                type="text"
-                                                name="plot_number"
-                                                value={formData.plot_number}
-                                                onChange={handleInputChange}
-                                                placeholder="Enter land identification number"
-                                                className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-brand-primary focus:border-brand-primary outline-none shadow-sm"
-                                            />
-                                            <p className="text-gray-400 text-xs mt-1">Helps in mapping your soil data accurately.</p>
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                            <div>
+                                                <label className="block text-sm font-semibold text-gray-700 mb-2">Survey / Khasra / Plot Number</label>
+                                                <input
+                                                    type="text"
+                                                    name="plot_number"
+                                                    value={formData.plot_number}
+                                                    onChange={handleInputChange}
+                                                    placeholder="Enter land ID"
+                                                    className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-brand-primary focus:border-brand-primary outline-none shadow-sm"
+                                                />
+                                                <p className="text-gray-400 text-xs mt-1">Helps in mapping your soil data accurately.</p>
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm font-semibold text-gray-700 mb-2">Farm Area (in Hectares)</label>
+                                                <input
+                                                    type="number"
+                                                    step="0.01"
+                                                    name="area_ha"
+                                                    value={formData.area_ha}
+                                                    onChange={handleInputChange}
+                                                    placeholder="e.g. 2.5"
+                                                    className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-brand-primary focus:border-brand-primary outline-none shadow-sm"
+                                                />
+                                            </div>
                                         </div>
                                     </div>
 

@@ -32,14 +32,25 @@ const FarmerInputForm = () => {
     const navigate = useNavigate();
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
-    const [markerPos, setMarkerPos] = useState(null);
+    const [points, setPoints] = useState([]);
+    const [activePointId, setActivePointId] = useState(null);
+    const [isAnalyzingMultiple, setIsAnalyzingMultiple] = useState(false);
     const [boundaryGeoJSON, setBoundaryGeoJSON] = useState(null);
+    const [farmerProfile, setFarmerProfile] = useState(null);
+
+    React.useEffect(() => {
+        try {
+            const profile = JSON.parse(localStorage.getItem('farmer'));
+            if (profile) setFarmerProfile(profile);
+        } catch (e) {}
+    }, []);
 
     // State management for sync
     const [districtsList, setDistrictsList] = useState([]);
     const [subDistrictsList, setSubDistrictsList] = useState([]);
     const [selectedDistrict, setSelectedDistrict] = useState("");
     const [selectedSubDistrict, setSelectedSubDistrict] = useState("");
+    const [lockedLocation, setLockedLocation] = useState(false);
 
     // Store full sub-district data to allow filtering without re-fetching
     const [fullSubDistrictData, setFullSubDistrictData] = useState(null);
@@ -57,10 +68,9 @@ const FarmerInputForm = () => {
         moisture: '',
         organic_carbon: '',
         temperature: '',
-        stage: ''
+        stage: 'germination'
     });
 
-    const [analysisResult, setAnalysisResult] = useState(null);
     const [fieldErrors, setFieldErrors] = useState({});
     const [activeStage, setActiveStage] = useState('germination');
 
@@ -124,47 +134,77 @@ const FarmerInputForm = () => {
         formData.stage
     ]);
 
-    // Separate effect to clear results on any significant change (keeps it clean)
-    React.useEffect(() => {
-        if (analysisResult) {
-            setAnalysisResult(null);
-        }
-    }, [
-        formData.n, formData.p, formData.k, formData.ph,
-        formData.moisture, formData.organic_carbon, formData.temperature,
-        formData.stage
-    ]);
 
-    // Reset soil parameters when stage or location changes
-    React.useEffect(() => {
-        if (formData.stage || formData.state || formData.district || formData.subDistrict) {
-            setFormData(prev => ({
-                ...prev,
-                n: '',
-                p: '',
-                k: '',
-                ph: '',
-                moisture: '',
-                organic_carbon: '',
-                temperature: ''
-            }));
-            setFieldErrors({});
-        }
-    }, [formData.stage, formData.state, formData.district, formData.subDistrict]);
 
     // --- Map Logic ---
 
-    // 1. Initial Load: Fetch State Boundaries
+    // 1. Initial Load: Fetch State Boundaries or Prepopulate Profile
     React.useEffect(() => {
         const loadInitialMap = async () => {
+            let userProfile = null;
             try {
-                const res = await fetch(baseUrl + '/map/state');
-                if (!res.ok) throw new Error("Backend not reachable");
-                const data = await res.json();
-                setBoundaryGeoJSON(data);
-            } catch (e) {
-                console.error("Initial map load failed:", e);
-                setError("Map Service Unavailable. Please start the backend.");
+                userProfile = JSON.parse(localStorage.getItem('farmer'));
+            } catch(e) {}
+
+            if (userProfile && userProfile.state) {
+                // Lock fields to farmer profile
+                setLockedLocation(true);
+                setFormData(prev => ({
+                    ...prev,
+                    state: userProfile.state || '',
+                    district: userProfile.district || '',
+                    subDistrict: userProfile.village || ''
+                }));
+                if (userProfile.district) {
+                    setDistrictsList([userProfile.district]);
+                    setSelectedDistrict(userProfile.district);
+                }
+                if (userProfile.village) {
+                    setSubDistrictsList([userProfile.village]);
+                    setSelectedSubDistrict(userProfile.village);
+                }
+
+                try {
+                    setLoading(true);
+                    // Fetch appropriate map level
+                    if (userProfile.village && userProfile.district) {
+                        const res = await fetch(`${baseUrl}/map/subdistrict?state=${userProfile.state}&district=${userProfile.district}`);
+                        if (res.ok) {
+                            const data = await res.json();
+                            setFullSubDistrictData(data);
+                            const feature = data.features.find(f => {
+                                const props = f.properties;
+                                const name = props.TEHSIL || props.TEHSIL_NAM || props.sub_dist || props.District;
+                                return name && name.toLowerCase() === userProfile.village.toLowerCase();
+                            });
+                            if (feature) {
+                                setBoundaryGeoJSON({ type: "FeatureCollection", features: [feature] });
+                            } else {
+                                setBoundaryGeoJSON(data);
+                            }
+                        }
+                    } else if (userProfile.district) {
+                        const res = await fetch(`${baseUrl}/map/district?state=${userProfile.state}`);
+                        if (res.ok) setBoundaryGeoJSON(await res.json());
+                    } else {
+                        const res = await fetch(baseUrl + '/map/state');
+                        if (res.ok) setBoundaryGeoJSON(await res.json());
+                    }
+                } catch (e) {
+                    console.error("Profile map load failed:", e);
+                } finally {
+                    setLoading(false);
+                }
+            } else {
+                try {
+                    const res = await fetch(baseUrl + '/map/state');
+                    if (!res.ok) throw new Error("Backend not reachable");
+                    const data = await res.json();
+                    setBoundaryGeoJSON(data);
+                } catch (e) {
+                    console.error("Initial map load failed:", e);
+                    setError("Map Service Unavailable. Please start the backend.");
+                }
             }
         };
         loadInitialMap();
@@ -172,6 +212,7 @@ const FarmerInputForm = () => {
 
     // 2. Handle State Change -> Load Districts
     const handleStateChange = async (e) => {
+        if (lockedLocation) return;
         const newState = e.target.value;
         setFormData({ ...formData, state: newState, district: '', subDistrict: '' });
 
@@ -183,7 +224,6 @@ const FarmerInputForm = () => {
         setFullSubDistrictData(null); // Clear stored sub-district data
 
         if (newState) {
-            setAnalysisResult(null); // Clear previous results
             try {
                 setLoading(true);
                 const res = await fetch(`${baseUrl}/map/district?state=${newState}`);
@@ -222,6 +262,7 @@ const FarmerInputForm = () => {
 
     // 3. Handle District Change -> Load Sub-Districts
     const handleDistrictChange = async (e) => {
+        if (lockedLocation) return;
         const newDistrict = e.target.value;
         setFormData({ ...formData, district: newDistrict, subDistrict: '' });
 
@@ -264,6 +305,7 @@ const FarmerInputForm = () => {
 
     // 4. Handle Sub-District Change -> Filter & Zoom
     const handleSubDistrictChange = (e) => {
+        if (lockedLocation) return;
         const newSub = e.target.value;
         setFormData({ ...formData, subDistrict: newSub });
         setSelectedSubDistrict(newSub);
@@ -293,6 +335,18 @@ const FarmerInputForm = () => {
 
     // Reset View Logic
     const handleResetView = async () => {
+        if (lockedLocation) {
+            setFormData(prev => ({
+                ...prev,
+                n: '', p: '', k: '', ph: '', moisture: '', organic_carbon: '', temperature: ''
+            }));
+            setPoints([]);
+            setActivePointId(null);
+            setError(null);
+            setFieldErrors({});
+            return;
+        }
+
         setLoading(true);
         try {
             // Reset form fields
@@ -300,7 +354,8 @@ const FarmerInputForm = () => {
                 ...prev,
                 state: '',
                 district: '',
-                subDistrict: ''
+                subDistrict: '',
+                n: '', p: '', k: '', ph: '', moisture: '', organic_carbon: '', temperature: '', stage: '', points: ''
             }));
 
             // Reset UI state
@@ -309,9 +364,10 @@ const FarmerInputForm = () => {
             setDistrictsList([]);
             setSubDistrictsList([]);
             setFullSubDistrictData(null);
-            setMarkerPos(null);
-            setAnalysisResult(null);
+            setPoints([]);
+            setActivePointId(null);
             setError(null);
+            setFieldErrors({});
 
             // Re-fetch initial state map
             const res = await fetch(baseUrl + '/map/state');
@@ -329,6 +385,7 @@ const FarmerInputForm = () => {
 
     // Map Interaction: Click Logic
     const handleMapRegionClick = (regionName) => {
+        if (lockedLocation) return;
         // Logic to determine if we clicked a State, District, or Sub-District
         // If we have no state selected, we probably clicked a state? (Not supported yet per requirements, assume State is selected via dropdown or we are in State View)
 
@@ -362,49 +419,86 @@ const FarmerInputForm = () => {
         }
     };
 
+    // Check if the current active point has all required soil parameters filled
+    const isCurrentPointFilled = () => {
+        if (!activePointId) return true; // No active point, allow freely
+        const activePoint = points.find(p => p.id === activePointId);
+        if (!activePoint) return true;
+        const { n, p, k, ph, moisture, organic_carbon, temperature } = activePoint.data;
+        return [n, p, k, ph, moisture, organic_carbon, temperature].every(
+            v => v !== '' && v !== null && v !== undefined
+        );
+    };
+
+    // Handle Map Click to Add Points
+    const handleMapClick = (latlng) => {
+        // Stop adding points if an analysis has already been performed
+        if (isAnalyzingMultiple || points.some(pt => pt.analysisResult != null)) {
+            return;
+        }
+
+        // Block adding a new point if the current active point isn't filled yet
+        if (!isCurrentPointFilled()) {
+            setError('⚠️ Please fill in all soil parameters for the current point before adding a new one.');
+            return;
+        }
+
+        setError(null);
+        const newPoint = {
+            id: Date.now(),
+            lat: latlng.lat,
+            lng: latlng.lng,
+            data: { n: '', p: '', k: '', ph: '', moisture: '', organic_carbon: '', temperature: '' },
+            analysisResult: null
+        };
+        setPoints(prev => [...prev, newPoint]);
+        setActivePointId(newPoint.id);
+        
+        // Reset form for the new point
+        setFormData(prev => ({
+            ...prev,
+            n: '', p: '', k: '', ph: '', moisture: '', organic_carbon: '', temperature: ''
+        }));
+    };
+
+    // Handle Selecting an Existing Point
+    const handlePointSelect = (id) => {
+        // If switching away from an unfilled point, warn the user
+        if (id !== activePointId && !isCurrentPointFilled()) {
+            setError('⚠️ Please fill in all soil parameters for the current active point before switching.');
+            return;
+        }
+        setError(null);
+        setActivePointId(id);
+        const pt = points.find(p => p.id === id);
+        if (pt) {
+            setFormData(prev => ({ ...prev, ...pt.data }));
+            setFieldErrors({}); // Reset errors for new context
+        }
+    };
+
+    // Input changes map back to the active point
     const handleInputChange = (e) => {
         const { name, value } = e.target;
         setFormData({ ...formData, [name]: value });
+        
+        if (activePointId && ['n','p','k','ph','moisture','organic_carbon','temperature'].includes(name)) {
+            setPoints(prev => prev.map(pt => 
+                pt.id === activePointId 
+                    ? { ...pt, data: { ...pt.data, [name]: value }, analysisResult: null }
+                    : pt
+            ));
+        } else if (name === 'stage') {
+            // If they change the global growth stage, wipe all results so they must re-analyze
+            setPoints(prev => prev.map(pt => ({ ...pt, analysisResult: null })));
+        }
     };
 
     const handleSubmit = async (e) => {
         e.preventDefault();
-        setAnalysisResult(null); // Clear previous results to show a fresh state
-        setLoading(true);
-        setError(null);
-
-        // Prepare payload
-        const payload = {
-            farmer_name: formData.name || "Unknown Farmer",
-            field_id: formData.fieldId || "F-001",
-            state: formData.state || "Unknown",
-            district: formData.district || "Unknown",
-            sub_district: formData.subDistrict || "Unknown",
-            nitrogen: parseFloat(formData.n) || 0.0,
-            phosphorus: parseFloat(formData.p) || 0.0,
-            potassium: parseFloat(formData.k) || 0.0,
-            ph: parseFloat(formData.ph) || 7.0,
-            moisture: parseFloat(formData.moisture) || 0.0,
-            organic_carbon: parseFloat(formData.organic_carbon) || 0.0,
-            temperature: parseFloat(formData.temperature) || 0.0,
-            selected_stage: formData.stage,
-            coordinates: markerPos ? [markerPos.lat, markerPos.lng] : null
-        };
-
-        // Final validation before submission
-        const activeRules = getActiveRules();
-        const errors = {};
-        Object.keys(activeRules).forEach(key => {
-            const rule = activeRules[key];
-            const val = parseFloat(formData[key]);
-            if (formData[key] && (val < rule.min || val > rule.max)) {
-                errors[key] = `Value out of range (${rule.min}-${rule.max})`;
-            }
-        });
-
-        if (Object.keys(errors).length > 0) {
-            setFieldErrors(errors);
-            setError("Some fields have values outside the recommended range.");
+        
+        if (points.length === 0) {
+            setError("Please select at least one point on the map.");
             return;
         }
 
@@ -413,30 +507,75 @@ const FarmerInputForm = () => {
             return;
         }
 
-        try {
-            // Mock API call or real endpoint
-            console.log("Submitting payload:", payload);
+        // Validate all points
+        const activeRules = getActiveRules();
+        let hasErrors = false;
+        
+        for (const pt of points) {
+            Object.keys(activeRules).forEach(key => {
+                const rule = activeRules[key];
+                const val = parseFloat(pt.data[key]);
+                if (pt.data[key] && (val < rule.min || val > rule.max)) {
+                    hasErrors = true;
+                }
+                if (!pt.data[key]) hasErrors = true; // Required fields
+            });
+        }
 
-            // POST to Backend Analysis API
-            const res = await fetch(baseUrl + '/analyze/', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
+        if (hasErrors) {
+            setError("Some points have missing or invalid soil data. Please click each point on the map and verify the inputs.");
+            return;
+        }
+
+        setIsAnalyzingMultiple(true);
+        setError(null);
+        setFieldErrors({});
+
+        try {
+            // Process all points concurrently
+            const promises = points.map(async (pt) => {
+                const payload = {
+                    farmer_name: farmerProfile?.full_name || formData.name || "Unknown Farmer",
+                    farmer_id: farmerProfile?.id || null,
+                    field_id: formData.fieldId || "F-001",
+                    state: formData.state || "Unknown",
+                    district: formData.district || "Unknown",
+                    sub_district: formData.subDistrict || "Unknown",
+                    nitrogen: parseFloat(pt.data.n) || 0.0,
+                    phosphorus: parseFloat(pt.data.p) || 0.0,
+                    potassium: parseFloat(pt.data.k) || 0.0,
+                    ph: parseFloat(pt.data.ph) || 7.0,
+                    moisture: parseFloat(pt.data.moisture) || 0.0,
+                    organic_carbon: parseFloat(pt.data.organic_carbon) || 0.0,
+                    temperature: parseFloat(pt.data.temperature) || 0.0,
+                    selected_stage: formData.stage,
+                    coordinates: [pt.lat, pt.lng]
+                };
+
+                const res = await fetch(baseUrl + '/analyze/', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!res.ok) throw new Error(`Analysis failed for point ${pt.id}`);
+                const data = await res.json();
+                return { id: pt.id, result: data };
             });
 
-            if (!res.ok) throw new Error("Analysis failed");
+            const results = await Promise.all(promises);
 
-            const data = await res.json();
-            setAnalysisResult(data);
-
-            // Do NOT navigate automatically. Let the user see the result on the map.
-            // console.log("Analysis Result saved to state:", data);
+            // Update points with their results
+            setPoints(prev => prev.map(pt => {
+                const found = results.find(r => r.id === pt.id);
+                return found ? { ...pt, analysisResult: found.result } : pt;
+            }));
 
         } catch (err) {
             console.error("API Error:", err);
-            setError("Unable to analyze soil data. Please check backend connection.");
+            setError("Unable to analyze all points. Please check backend connection.");
         } finally {
-            setLoading(false);
+            setIsAnalyzingMultiple(false);
         }
     };
 
@@ -450,8 +589,35 @@ const FarmerInputForm = () => {
                             Field Details
                         </h1>
                     </div>
-                    <div className="text-sm text-gray-600">
-                        Welcome, Farmer
+                    <div className="flex items-center gap-4">
+                        {/* Download CSV Button */}
+                        {farmerProfile?.id && (
+                            <a
+                                href={`${baseUrl}/farmers/${farmerProfile.id}/results/download?stage=${formData.stage || 'germination'}`}
+                                download={`my_soil_results_${formData.stage || 'germination'}.csv`}
+                                className="flex items-center gap-1.5 px-3 py-1.5 bg-green-700 hover:bg-green-800 text-white text-xs font-bold rounded-lg shadow transition-all hover:scale-105 active:scale-95"
+                                title="Download your past soil analysis results as CSV"
+                            >
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                                </svg>
+                                Download History
+                            </a>
+                        )}
+                        {/* Farmer Profile Badge */}
+                        <div className="flex items-center gap-3">
+                        <div className="text-right">
+                            <p className="text-sm font-semibold text-gray-800">
+                                {farmerProfile?.full_name || 'Farmer'}
+                            </p>
+                            {farmerProfile?.mobile_number && (
+                                <p className="text-xs text-gray-500 font-mono">ID: {farmerProfile.mobile_number}</p>
+                            )}
+                        </div>
+                        <div className="w-8 h-8 rounded-full bg-green-100 border-2 border-green-300 flex items-center justify-center text-green-700 font-bold text-sm">
+                            {farmerProfile?.full_name ? farmerProfile.full_name.charAt(0).toUpperCase() : 'F'}
+                        </div>
+                    </div>
                     </div>
                 </div>
             </header>
@@ -463,9 +629,11 @@ const FarmerInputForm = () => {
                 <div className="w-full lg:w-[60%] h-[40vh] lg:h-full relative bg-gray-200 order-1 lg:order-1">
                     <FarmerMap
                         boundaryGeoJSON={boundaryGeoJSON}
-                        onLocationSelect={setMarkerPos}
+                        points={points}
+                        activePointId={activePointId}
+                        onMapClick={handleMapClick}
+                        onPointSelect={handlePointSelect}
                         onRegionSelect={handleMapRegionClick}
-                        analysisResult={analysisResult}
                         activeRegion={formData.subDistrict || formData.district || formData.state}
                         activeStage={formData.stage}
                     />
@@ -498,62 +666,6 @@ const FarmerInputForm = () => {
                             )}
                         </div>
 
-                        {analysisResult && (
-                            <div className="mb-8 p-6 bg-green-50 rounded-xl border border-green-100 shadow-sm animate-in fade-in slide-in-from-top-4 duration-500">
-                                <div className="flex justify-between items-center mb-4">
-                                    <h3 className="text-lg font-bold text-green-900">Analysis Results</h3>
-                                    <span className="px-2 py-1 bg-green-100 text-green-700 text-[10px] font-bold uppercase rounded">Live</span>
-                                </div>
-
-                                <div className="space-y-4">
-                                    <div className="flex justify-between items-end">
-                                        <div>
-                                            <p className="text-[10px] text-gray-500 uppercase font-bold tracking-wider">{formData.stage} Score</p>
-                                            <p className="text-2xl font-black text-green-800">
-                                                {formData.stage === 'germination' ? analysisResult.germ_shs.toFixed(1) :
-                                                    formData.stage === 'booting' ? analysisResult.boot_shs.toFixed(1) :
-                                                        analysisResult.rip_shs.toFixed(1)}%
-                                            </p>
-                                        </div>
-                                        <div className="text-right">
-                                            <p className="text-[10px] text-gray-500 uppercase font-bold tracking-wider">Suitability</p>
-                                            <p className="text-sm font-bold truncate" style={{
-                                                color: getShsColor(formData.stage,
-                                                    formData.stage === 'germination' ? analysisResult.germ_shs :
-                                                        formData.stage === 'booting' ? analysisResult.boot_shs :
-                                                            analysisResult.rip_shs)
-                                            }}>
-                                                {getSuitabilityCategory(formData.stage,
-                                                    formData.stage === 'germination' ? analysisResult.germ_shs :
-                                                        formData.stage === 'booting' ? analysisResult.boot_shs :
-                                                            analysisResult.rip_shs)}
-                                            </p>
-                                        </div>
-                                    </div>
-                                    <div className="pt-3 border-t border-green-100 italic text-[10px] text-gray-500">
-                                        Note: This result is specifically calculated for the {formData.stage} growth stage.
-                                    </div>
-                                </div>
-
-                                <div className="mt-6 flex gap-3">
-                                    <button
-                                        onClick={() => navigate('/germination-suitability', { state: { district: formData.district } })}
-                                        className="flex-grow py-2 px-3 bg-white border border-green-200 text-green-700 text-xs font-bold rounded-lg hover:bg-green-100 transition-colors shadow-sm"
-                                    >
-                                        View Regional Map
-                                    </button>
-                                    <button
-                                        onClick={() => {
-                                            setAnalysisResult(null);
-                                            setFormData({ ...formData, n: '', p: '', k: '', ph: '', moisture: '', organic_carbon: '', temperature: '' });
-                                        }}
-                                        className="py-2 px-3 bg-gray-100 text-gray-600 text-xs font-bold rounded-lg hover:bg-gray-200 transition-colors"
-                                    >
-                                        Reset
-                                    </button>
-                                </div>
-                            </div>
-                        )}
 
                         <form onSubmit={handleSubmit} className="space-y-6">
 
@@ -566,13 +678,17 @@ const FarmerInputForm = () => {
                                     <div>
                                         <label className="block text-sm font-medium text-gray-700 mb-1">State</label>
                                         <select
-                                            className="w-full px-3 py-2 border border-gray-300 rounded focus:ring-green-500 focus:border-green-500 bg-white"
+                                            className={`w-full px-3 py-2 border rounded focus:ring-green-500 focus:border-green-500 ${lockedLocation ? 'bg-gray-100 text-gray-500 cursor-not-allowed border-gray-200' : 'bg-white border-gray-300'}`}
                                             name="state"
                                             value={formData.state}
                                             onChange={handleStateChange}
+                                            disabled={lockedLocation}
                                             required
                                         >
                                             <option value="">Select State</option>
+                                            {lockedLocation && formData.state && !["Andhra Pradesh", "Arunachal Pradesh", "Assam", "Bihar", "Chhattisgarh", "Goa", "Gujarat", "Haryana", "Himachal Pradesh", "Jharkhand", "Karnataka", "Kerala", "Madhya Pradesh", "Maharashtra", "Manipur", "Meghalaya", "Mizoram", "Nagaland", "Odisha", "Punjab", "Rajasthan", "Sikkim", "Tamil Nadu", "Telangana", "Tripura", "Uttar Pradesh", "Uttarakhand", "West Bengal", "Andaman and Nicobar Islands", "Chandigarh", "Dadra and Nagar Haveli and Daman and Diu", "Delhi", "Jammu and Kashmir", "Ladakh", "Lakshadweep", "Puducherry"].includes(formData.state) ? (
+                                                <option value={formData.state}>{formData.state}</option>
+                                            ) : null}
                                             {[
                                                 "Andhra Pradesh", "Arunachal Pradesh", "Assam", "Bihar", "Chhattisgarh",
                                                 "Goa", "Gujarat", "Haryana", "Himachal Pradesh", "Jharkhand",
@@ -591,11 +707,11 @@ const FarmerInputForm = () => {
                                     <div>
                                         <label className="block text-sm font-medium text-gray-700 mb-1">District</label>
                                         <select
-                                            className="w-full px-3 py-2 border border-gray-300 rounded focus:ring-green-500 focus:border-green-500 bg-white"
+                                            className={`w-full px-3 py-2 border rounded focus:ring-green-500 focus:border-green-500 ${lockedLocation ? 'bg-gray-100 text-gray-500 cursor-not-allowed border-gray-200' : 'bg-white border-gray-300'}`}
                                             name="district"
                                             value={formData.district}
                                             onChange={handleDistrictChange}
-                                            disabled={!formData.state}
+                                            disabled={lockedLocation || !formData.state}
                                             required
                                         >
                                             <option value="">Select District</option>
@@ -607,11 +723,11 @@ const FarmerInputForm = () => {
                                     <div>
                                         <label className="block text-sm font-medium text-gray-700 mb-1">Sub-District / Tehsil</label>
                                         <select
-                                            className="w-full px-3 py-2 border border-gray-300 rounded focus:ring-green-500 focus:border-green-500 bg-white"
+                                            className={`w-full px-3 py-2 border rounded focus:ring-green-500 focus:border-green-500 ${lockedLocation ? 'bg-gray-100 text-gray-500 cursor-not-allowed border-gray-200' : 'bg-white border-gray-300'}`}
                                             name="subDistrict"
                                             value={selectedSubDistrict}
                                             onChange={handleSubDistrictChange}
-                                            disabled={!formData.district}
+                                            disabled={lockedLocation || !formData.district}
                                         >
                                             <option value="">Select Sub-District</option>
                                             {subDistrictsList.map(sub => (
@@ -636,6 +752,19 @@ const FarmerInputForm = () => {
                                             <option value="booting">Booting Stage</option>
                                             <option value="ripening">Ripening Stage</option>
                                         </select>
+                                    </div>
+                                    <div>
+                                        <div className="flex justify-between items-center mb-1">
+                                            <label className="block text-sm font-medium text-gray-700">Active Point (Lat, Lon)</label>
+                                            <span className="text-[10px] font-bold text-gray-500 bg-gray-100 px-1.5 rounded-full border border-gray-200">Point {activePointId ? activePointId : 'None'}</span>
+                                        </div>
+                                        <input
+                                            type="text"
+                                            value={activePointId ? `${points.find(p => p.id === activePointId)?.lat.toFixed(5)}, ${points.find(p => p.id === activePointId)?.lng.toFixed(5)}` : ''}
+                                            readOnly
+                                            className="w-full px-3 py-2 border border-gray-300 rounded bg-gray-50 text-gray-600"
+                                            placeholder="Click on map to add point"
+                                        />
                                     </div>
                                 </div>
                             </div>
@@ -763,21 +892,34 @@ const FarmerInputForm = () => {
                             </div>
 
                             {/* Action Bar */}
-                            <div className="pt-6 border-t border-gray-100">
+                            <div className="pt-6 border-t border-gray-100 space-y-3">
                                 <button
                                     type="submit"
-                                    disabled={loading}
-                                    className={`w-full text-white font-bold py-4 px-6 rounded-lg text-lg shadow-md transition-colors flex items-center justify-center gap-2 ${loading ? 'bg-gray-400 cursor-wait' : 'bg-green-800 hover:bg-green-900'
+                                    disabled={loading || isAnalyzingMultiple}
+                                    className={`w-full text-white font-bold py-4 px-6 rounded-lg text-lg shadow-md transition-colors flex items-center justify-center gap-2 ${(loading || isAnalyzingMultiple) ? 'bg-gray-400 cursor-wait' : 'bg-green-800 hover:bg-green-900'
                                         }`}
                                 >
-                                    {loading ? (
-                                        <span>Analyzing soil data...</span>
+                                    {(loading || isAnalyzingMultiple) ? (
+                                        <span>Analyzing all points...</span>
                                     ) : (
                                         <>
-                                            <span>Analyze Soil Suitability Score</span>
+                                            <span>Analyze All Points ({points.length})</span>
                                         </>
                                     )}
                                 </button>
+                                
+                                {points.some(pt => pt.analysisResult != null) && (
+                                    <button
+                                        type="button"
+                                        onClick={() => navigate(`/farmer/advisory?stage=${formData.stage || 'germination'}`)}
+                                        className="w-full text-white font-bold py-4 px-6 rounded-lg text-lg shadow-md transition-colors flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 mt-3"
+                                    >
+                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                        </svg>
+                                        Get Advisory
+                                    </button>
+                                )}
                             </div>
 
                         </form>

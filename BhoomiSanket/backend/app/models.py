@@ -64,6 +64,8 @@ class Farmer(Base):
     mobile = Column(String(15), unique=True, index=True)
     aadhaar_encrypted = Column(String) # Encrypted
     password = Column(String) # For authentication
+    gender = Column(String(20), nullable=True)
+    dob = Column(DateTime, nullable=True)
     
     farms = relationship("Farm", back_populates="farmer")
 
@@ -73,6 +75,7 @@ class Farm(Base):
     farmer_id = Column(Integer, ForeignKey('farmer.farmer_id'))
     village_id = Column(Integer, ForeignKey('village.village_id'))
     farm_name = Column(String(150))
+    plot_number = Column(String(100), nullable=True)
     area_ha = Column(Float)
     geom = Column(Geometry('GEOMETRY', srid=4326))
     
@@ -198,6 +201,7 @@ class CropRecommendation(Base):
     __tablename__ = 'crop_recommendation'
     recommendation_id = Column(Integer, primary_key=True, index=True)
     farm_id = Column(Integer, ForeignKey('farm.farm_id'))
+    farmer_id = Column(Integer, ForeignKey('farmer.farmer_id'), nullable=True)
     crop_id = Column(Integer, ForeignKey('crop_master.crop_id'))
     suitability_score = Column(Float)
     recommended = Column(Boolean)
@@ -256,3 +260,80 @@ class LatLonSuitability(Base):
     __table_args__ = (
         UniqueConstraint('farm_id', 'soil_sample_id', 'stage', name='_farm_sample_stage_uc'),
     )
+
+# --- Shared columns mixin for farmer result tables ---
+class _FarmerResultBase:
+    id = Column(Integer, primary_key=True, index=True)
+    farmer_id = Column(Integer, ForeignKey('farmer.farmer_id'), index=True, nullable=True)
+    lat = Column(Float)
+    lon = Column(Float)
+    nitrogen = Column(Float)
+    phosphorus = Column(Float)
+    potassium = Column(Float)
+    ph = Column(Float)
+    moisture = Column(Float)
+    organic_carbon = Column(Float)
+    temperature = Column(Float)
+    created_at = Column(DateTime, default=func.now())
+
+class FarmerResultGerm(_FarmerResultBase, Base):
+    __tablename__ = 'farmer_result_germ'
+    id = Column(Integer, primary_key=True, index=True)
+    farmer_id = Column(Integer, ForeignKey('farmer.farmer_id'), index=True, nullable=True)
+    lat = Column(Float)
+    lon = Column(Float)
+    nitrogen = Column(Float)
+    phosphorus = Column(Float)
+    potassium = Column(Float)
+    ph = Column(Float)
+    moisture = Column(Float)
+    organic_carbon = Column(Float)
+    temperature = Column(Float)
+    germ_shs = Column(Float)
+    created_at = Column(DateTime, default=func.now())
+
+class FarmerResultBoot(_FarmerResultBase, Base):
+    __tablename__ = 'farmer_result_boot'
+    id = Column(Integer, primary_key=True, index=True)
+    farmer_id = Column(Integer, ForeignKey('farmer.farmer_id'), index=True, nullable=True)
+    lat = Column(Float)
+    lon = Column(Float)
+    nitrogen = Column(Float)
+    phosphorus = Column(Float)
+    potassium = Column(Float)
+    ph = Column(Float)
+    moisture = Column(Float)
+    organic_carbon = Column(Float)
+    temperature = Column(Float)
+    boot_shs = Column(Float)
+    created_at = Column(DateTime, default=func.now())
+
+class FarmerResultRip(_FarmerResultBase, Base):
+    __tablename__ = 'farmer_result_rip'
+    id = Column(Integer, primary_key=True, index=True)
+    farmer_id = Column(Integer, ForeignKey('farmer.farmer_id'), index=True, nullable=True)
+    lat = Column(Float)
+    lon = Column(Float)
+    nitrogen = Column(Float)
+    phosphorus = Column(Float)
+    potassium = Column(Float)
+    ph = Column(Float)
+    moisture = Column(Float)
+    organic_carbon = Column(Float)
+    temperature = Column(Float)
+    rip_shs = Column(Float)
+    created_at = Column(DateTime, default=func.now())
+
+class FarmerAdvisory(Base):
+    __tablename__ = 'farmer_advisory'
+    id = Column(Integer, primary_key=True, index=True)
+    farmer_id = Column(Integer, ForeignKey('farmer.farmer_id'), index=True)
+    result_id = Column(Integer, index=True) # ID from the respective stage table
+    stage = Column(String(50)) # germination, booting, ripening
+    lat = Column(Float)
+    lon = Column(Float)
+    shs_score = Column(Float)
+    shs_category = Column(String(50))
+    advisory_text = Column(String) # JSON string containing per-parameter advice
+    overall_advice = Column(String)
+    created_at = Column(DateTime, default=func.now())

@@ -4,7 +4,7 @@ from typing import Optional, List
 import uuid
 from sqlalchemy.orm import Session
 from app.database import SessionLocal
-from app.models import LatLonSuitability
+from app.models import LatLonSuitability, FarmerResultGerm, FarmerResultBoot, FarmerResultRip
 from app.utils.wheat_engine import WheatSHSEngine
 
 router = APIRouter(
@@ -35,6 +35,7 @@ class AnalysisRequest(BaseModel):
     selected_stage: Optional[str] = "germination"
     ndvi: Optional[float] = 0.7  # Default NDVI for booting/ripening if not provided
     coordinates: Optional[List[float]] = None
+    farmer_id: Optional[int] = None  # Actual farmer PK from farmer table
 
 class AnalysisResponse(BaseModel):
     analysis_id: str
@@ -68,32 +69,31 @@ async def analyze_soil(request: AnalysisRequest, db: Session = Depends(get_db)):
         res_b = boot_engine.predict(sample)
         res_r = rip_engine.predict(sample)
 
-        # 3. Save to database
         analysis_id = str(uuid.uuid4())
         lat, lon = (request.coordinates[0], request.coordinates[1]) if request.coordinates else (0.0, 0.0)
-
-        suitability_record = LatLonSuitability(
-            batch_id=analysis_id,
-            source_file="farmer_form_input",
+        
+        # Insert into the correct stage-specific table
+        stage = (request.selected_stage or "germination").lower().strip()
+        base_fields = dict(
+            farmer_id=request.farmer_id,
             lat=lat,
             lon=lon,
-            n=request.nitrogen,
-            p=request.phosphorus,
-            k=request.potassium,
-            moisture=request.moisture,
+            nitrogen=request.nitrogen,
+            phosphorus=request.phosphorus,
+            potassium=request.potassium,
             ph=request.ph,
-            oc=request.organic_carbon,
-            temp=request.temperature,
-            ndvi=request.ndvi,
-            germ_shs=res_g["SHS"],
-            germ_category=res_g["Category"],
-            boot_shs=res_b["SHS"],
-            boot_category=res_b["Category"],
-            rip_shs=res_r["SHS"],
-            rip_category=res_r["Category"]
+            moisture=request.moisture,
+            organic_carbon=request.organic_carbon,
+            temperature=request.temperature,
         )
+        if stage == "booting":
+            farmer_result = FarmerResultBoot(**base_fields, boot_shs=res_b["SHS"])
+        elif stage == "ripening":
+            farmer_result = FarmerResultRip(**base_fields, rip_shs=res_r["SHS"])
+        else:  # germination (default)
+            farmer_result = FarmerResultGerm(**base_fields, germ_shs=res_g["SHS"])
 
-        db.add(suitability_record)
+        db.add(farmer_result)
         db.commit()
         
         return AnalysisResponse(

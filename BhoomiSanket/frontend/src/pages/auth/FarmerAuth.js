@@ -16,8 +16,9 @@ const FarmerAuth = () => {
     const [errors, setErrors] = useState({});
 
     // Dynamic Location State
-    const [locationData, setLocationData] = useState({ states: [], districts: {} });
+    const [locationData, setLocationData] = useState({ states: [], districts: {}, subdistricts: {} });
     const [availableDistricts, setAvailableDistricts] = useState([]);
+    const [availableVillages, setAvailableVillages] = useState([]);
 
     const [formData, setFormData] = useState({
         full_name: '',
@@ -28,7 +29,9 @@ const FarmerAuth = () => {
         state: '',
         district: '',
         village: '',
-        plot_number: ''
+        plot_number: '',
+        aadhaar: '',
+        area_ha: ''
     });
 
     // Fetch dynamic locations
@@ -59,8 +62,24 @@ const FarmerAuth = () => {
         setFormData(prev => {
             const newData = { ...prev, [name]: value };
             if (name === 'state') {
-                setAvailableDistricts(locationData.districts[value] || []);
+                const selectedState = locationData.states.find(st => st.name === value);
+                if (selectedState) {
+                    setAvailableDistricts(locationData.districts[selectedState.code] || []);
+                } else {
+                    setAvailableDistricts([]);
+                }
                 newData.district = ''; // Reset district when state changes
+                newData.village = ''; // Reset village when state changes
+                setAvailableVillages([]); // Clear villages
+            }
+            if (name === 'district') {
+                const selectedDistrict = availableDistricts.find(d => d.name === value);
+                if (selectedDistrict) {
+                    setAvailableVillages(locationData.subdistricts[selectedDistrict.code] || []);
+                } else {
+                    setAvailableVillages([]);
+                }
+                newData.village = ''; // Reset village when district changes
             }
             return newData;
         });
@@ -110,10 +129,18 @@ const FarmerAuth = () => {
 
         try {
             const endpoint = isLogin ? '/farmers/login' : '/farmers/register';
-            const payload = isLogin ? {
+            const payloadRaw = isLogin ? {
                 mobile_number: formData.mobile_number,
                 password: formData.password
             } : formData;
+
+            // Convert empty strings to null to satisfy backend schemas
+            const payload = { ...payloadRaw };
+            Object.keys(payload).forEach(key => {
+                if (payload[key] === '') {
+                    payload[key] = null;
+                }
+            });
 
             console.log(`Submitting to ${endpoint}:`, payload);
 
@@ -123,7 +150,13 @@ const FarmerAuth = () => {
                 body: JSON.stringify(payload)
             });
 
-            const data = await response.json();
+            let data;
+            try {
+                data = await response.json();
+            } catch (jsonErr) {
+                // If it's a 500 error that returns HTML/text, json() will throw
+                throw new Error("Server returned non-JSON response");
+            }
             console.log("Server response:", data);
 
             if (response.ok) {
@@ -344,13 +377,25 @@ const FarmerAuth = () => {
                                                                     <option value="Other">Other</option>
                                                                 </select>
                                                             </div>
-                                                            <div className="md:col-span-2">
+                                                            <div>
                                                                 <label className="block text-sm font-semibold text-gray-700 mb-1">Date of Birth (DOB)</label>
                                                                 <input
                                                                     type="date"
                                                                     name="dob"
                                                                     value={formData.dob}
                                                                     onChange={handleInputChange}
+                                                                    className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-brand-primary outline-none shadow-sm"
+                                                                />
+                                                            </div>
+                                                            <div>
+                                                                <label className="block text-sm font-semibold text-gray-700 mb-1">Aadhaar Number</label>
+                                                                <input
+                                                                    type="text"
+                                                                    name="aadhaar"
+                                                                    value={formData.aadhaar}
+                                                                    onChange={handleInputChange}
+                                                                    placeholder="Enter 12-digit Aadhaar"
+                                                                    maxLength="12"
                                                                     className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-brand-primary outline-none shadow-sm"
                                                                 />
                                                             </div>
@@ -374,7 +419,7 @@ const FarmerAuth = () => {
                                                                 >
                                                                     <option value="">Select State</option>
                                                                     {locationData.states.map(s => (
-                                                                        <option key={s} value={s}>{s}</option>
+                                                                        <option key={s.code} value={s.name}>{s.name}</option>
                                                                     ))}
                                                                 </select>
                                                             </div>
@@ -390,20 +435,24 @@ const FarmerAuth = () => {
                                                                 >
                                                                     <option value="">Select District</option>
                                                                     {availableDistricts.map(d => (
-                                                                        <option key={d} value={d}>{d}</option>
+                                                                        <option key={d.code} value={d.name}>{d.name}</option>
                                                                     ))}
                                                                 </select>
                                                             </div>
                                                             <div className="md:col-span-2">
                                                                 <label className="block text-sm font-semibold text-gray-700 mb-1">Village</label>
-                                                                <input
-                                                                    type="text"
+                                                                <select
                                                                     name="village"
                                                                     value={formData.village}
                                                                     onChange={handleInputChange}
-                                                                    placeholder="Enter village name"
-                                                                    className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-brand-primary outline-none shadow-sm"
-                                                                />
+                                                                    disabled={!formData.district}
+                                                                    className={`w-full px-4 py-3 border rounded-xl focus:ring-2 focus:ring-brand-primary outline-none bg-white shadow-sm ${!formData.district ? 'bg-gray-50 cursor-not-allowed opacity-50' : ''}`}
+                                                                >
+                                                                    <option value="">Select Village</option>
+                                                                    {availableVillages.map((v, i) => (
+                                                                        <option key={i} value={v.name}>{v.name}</option>
+                                                                    ))}
+                                                                </select>
                                                             </div>
                                                         </div>
                                                     </div>
@@ -413,17 +462,31 @@ const FarmerAuth = () => {
                                                         <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4 border-b border-gray-100 pb-2 flex items-center">
                                                             🌾 Section 3: Land Details
                                                         </h3>
-                                                        <div>
-                                                            <label className="block text-sm font-semibold text-gray-700 mb-1">Survey / Khasra / Plot Number</label>
-                                                            <input
-                                                                type="text"
-                                                                name="plot_number"
-                                                                value={formData.plot_number}
-                                                                onChange={handleInputChange}
-                                                                placeholder="Enter land identification number"
-                                                                className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-brand-primary outline-none shadow-sm"
-                                                            />
-                                                            <p className="text-gray-400 text-[10px] mt-1 italic">This helps in mapping your soil data accurately.</p>
+                                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                                            <div>
+                                                                <label className="block text-sm font-semibold text-gray-700 mb-1">Survey / Khasra / Plot Number</label>
+                                                                <input
+                                                                    type="text"
+                                                                    name="plot_number"
+                                                                    value={formData.plot_number}
+                                                                    onChange={handleInputChange}
+                                                                    placeholder="Enter land ID"
+                                                                    className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-brand-primary outline-none shadow-sm"
+                                                                />
+                                                                <p className="text-gray-400 text-[10px] mt-1 italic">This helps in mapping your soil data accurately.</p>
+                                                            </div>
+                                                            <div>
+                                                                <label className="block text-sm font-semibold text-gray-700 mb-1">Farm Area (in Hectares)</label>
+                                                                <input
+                                                                    type="number"
+                                                                    step="0.01"
+                                                                    name="area_ha"
+                                                                    value={formData.area_ha}
+                                                                    onChange={handleInputChange}
+                                                                    placeholder="e.g. 2.5"
+                                                                    className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-brand-primary outline-none shadow-sm"
+                                                                />
+                                                            </div>
                                                         </div>
                                                     </div>
                                                 </div>

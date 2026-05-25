@@ -101,21 +101,41 @@ const MapLanding = () => {
     const [showDistricts, setShowDistricts] = useState(false);
     const [showSubdistricts, setShowSubdistricts] = useState(false);
 
+    const handleResetView = () => {
+        if (mapInstance) {
+            mapInstance.setView(INDIA_CENTER, DEFAULT_ZOOM);
+        }
+        setShowStates(true);
+        setShowDistricts(false);
+        setShowSubdistricts(false);
+    };
+
     return (
         <div className="min-h-screen flex flex-col bg-gray-50">
             {/* Header */}
             <header className="h-16 bg-white shadow-sm border-b border-gray-200 z-20 px-6 flex justify-between items-center">
                 <h1 className="text-xl font-bold text-gray-800 tracking-tight">Map Landing</h1>
 
-                <Link
-                    to="/germination-suitability"
-                    className="bg-green-700 hover:bg-green-800 text-white px-6 py-2 rounded-lg font-bold transition-all shadow-md transform hover:scale-105 active:scale-95 flex items-center gap-2"
-                >
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-                    </svg>
-                    Soil Analysis
-                </Link>
+                <div className="flex gap-4">
+                    <Link
+                        to="/germination-suitability"
+                        className="bg-green-700 hover:bg-green-800 text-white px-6 py-2 rounded-lg font-bold transition-all shadow-md transform hover:scale-105 active:scale-95 flex items-center gap-2"
+                    >
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                        </svg>
+                        Administrator
+                    </Link>
+                    <Link
+                        to="/farmer/form"
+                        className="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-2 rounded-lg font-bold transition-all shadow-md transform hover:scale-105 active:scale-95 flex items-center gap-2"
+                    >
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                        </svg>
+                        Farmer
+                    </Link>
+                </div>
             </header>
 
             <div className="flex-grow flex flex-col lg:flex-row relative">
@@ -201,7 +221,7 @@ const MapLanding = () => {
                                 </button>
                                 {/* Recenter */}
                                 <button
-                                    onClick={() => mapInstance?.setView(INDIA_CENTER, DEFAULT_ZOOM)}
+                                    onClick={handleResetView}
                                     className="w-8 h-8 bg-green-600 text-white rounded-full shadow-md hover:bg-green-700 flex items-center justify-center z-10 transition-transform active:scale-95"
                                 >
                                     ⟳
@@ -224,6 +244,18 @@ const MapLanding = () => {
                             <span className="text-[9px] font-bold text-gray-400 uppercase">Pan</span>
                         </div>
                     </div>
+
+                    {/* Reset View Button */}
+                    <button
+                        onClick={handleResetView}
+                        className="absolute bottom-6 right-6 z-[1000] px-5 py-2.5 bg-white/95 border border-slate-200 rounded-xl shadow-xl text-sm font-bold text-slate-700 hover:bg-slate-50 flex items-center gap-2.5 transition-all hover:scale-105 active:scale-95 group"
+                        title="Reset map to national view"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5 text-green-600 transition-transform group-hover:rotate-180 duration-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                        </svg>
+                        RESET VIEW
+                    </button>
                 </div>
             </div>
         </div>

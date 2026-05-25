@@ -181,6 +181,7 @@ class CropRecommendation(Base):
     __tablename__ = 'crop_recommendation'
     recommendation_id = Column(Integer, primary_key=True, index=True)
     farm_id = Column(Integer, ForeignKey('farm.farm_id'))
+    farmer_id = Column(Integer, ForeignKey('farmer.farmer_id'), nullable=True)
     crop_id = Column(Integer, ForeignKey('crop_master.crop_id'))
     suitability_score = Column(Float)
     recommended = Column(Boolean)
